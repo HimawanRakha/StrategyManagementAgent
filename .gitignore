@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# .env.local berisi API key — jangan pernah di-commit (.env.example boleh)
+!.env.example
+
+# database PGlite lokal
+/.data/

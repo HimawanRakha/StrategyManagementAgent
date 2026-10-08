@@ -6,21 +6,51 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx --conditions=react-server scripts/seed.ts",
+    "smoke": "tsx --conditions=react-server scripts/smoke.ts",
+    "llm:check": "tsx --conditions=react-server scripts/llm-check.ts",
+    "seed:bem": "tsx scripts/seed-bem.ts",
+    "db:copy": "tsx scripts/db-copy.ts"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-pgvector": "^0.0.9",
+    "@google/genai": "^2.27.0",
+    "@neondatabase/serverless": "^1.2.0",
+    "@react-pdf/renderer": "^4.9.0",
+    "@upstash/qstash": "^2.12.0",
+    "@xyflow/react": "^12.12.0",
+    "docx": "^9.8.1",
+    "drizzle-orm": "^0.45.3",
+    "exceljs": "^4.4.0",
+    "groq-sdk": "^1.6.0",
+    "mammoth": "^1.13.0",
     "next": "16.3.8",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.23.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "recharts": "^3.10.1",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^18.0.5",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "^5.0.3"
   }
 }
