@@ -8,7 +8,8 @@ import { grandDesignPdf } from "@/lib/export/pdf";
 import { grandDesignXlsx } from "@/lib/export/xlsx";
 import { getDb, schema } from "@/lib/db/client";
 
-export const maxDuration = 60;
+// Satu analisis bisa butuh beberapa panggilan AI (masing-masing ≤ LLM_CALL_TIMEOUT_MS). 300 dtk = batas Vercel (Fluid Compute) paket Hobby.
+export const maxDuration = 300;
 
 type Ctx = { params: Promise<{ id: string; nodeId: string }> };
 

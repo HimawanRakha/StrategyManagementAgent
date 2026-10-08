@@ -2,7 +2,8 @@ import { z } from "zod";
 import { handle, projectOfRun, requireProject } from "@/lib/access";
 import { executeStep } from "@/lib/engine/run-workflow";
 
-export const maxDuration = 60;
+// Satu analisis bisa butuh beberapa panggilan AI (masing-masing ≤ LLM_CALL_TIMEOUT_MS). 300 dtk = batas Vercel (Fluid Compute) paket Hobby.
+export const maxDuration = 300;
 
 type Ctx = { params: Promise<{ id: string }> };
 const Body = z.object({ node: z.string().optional(), until: z.string().optional() });

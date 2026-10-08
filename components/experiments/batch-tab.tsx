@@ -51,6 +51,7 @@ function BatchForm({ workflowId, keys, canvas, onCreated }: { workflowId: string
   const [placement, setPlacement] = useState<Placement>(off);
   const [tag, setTag] = useState("baseline");
   const [n, setN] = useState("5");
+  const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -88,7 +89,7 @@ function BatchForm({ workflowId, keys, canvas, onCreated }: { workflowId: string
     setDone(null);
     try {
       const { runs } = await api<{ runs: RunRow[] }>("/api/runs/batch", {
-        body: { workflowId, experimentTag: tagT, placement, n: count, autoStart: true },
+        body: { workflowId, experimentTag: tagT, placement, n: count, autoStart: true, ...(model.trim() ? { model: model.trim() } : {}) },
       });
       setDone(`${runs.length} run dengan tag "${tagT}" dibuat dan masuk antrean.`);
       onCreated();
@@ -147,6 +148,9 @@ function BatchForm({ workflowId, keys, canvas, onCreated }: { workflowId: string
           {tagT.toLowerCase() === "baseline" && anyCheck && (
             <div className="rounded-md bg-warn-soft px-3 py-2 text-xs text-warn">Tag &ldquo;baseline&rdquo; tetapi ada pemeriksaan yang aktif. Matikan semua atau ganti tag.</div>
           )}
+          <Field label="Model AI (opsional)" hint="Kosong = model bawaan server (LLM_MODEL). Bila membandingkan model, sertakan nama model di tag, mis. baseline-flashlite.">
+            <Input value={model} onChange={(e) => setModel(e.target.value)} className="font-mono" placeholder="mis. gemini-flash-lite-latest" maxLength={80} />
+          </Field>
           <Field label="Jumlah run (1–50)">
             <Input type="number" min={1} max={50} value={n} onChange={(e) => setN(e.target.value)} className="w-28 tabular-nums" />
           </Field>

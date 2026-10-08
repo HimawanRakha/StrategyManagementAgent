@@ -1,7 +1,8 @@
 import { handle, projectOfRun, requireProject } from "@/lib/access";
 import { queueBackend, startAuto } from "@/lib/engine/queue";
 
-export const maxDuration = 60;
+// Satu analisis bisa butuh beberapa panggilan AI (masing-masing ≤ LLM_CALL_TIMEOUT_MS). 300 dtk = batas Vercel (Fluid Compute) paket Hobby.
+export const maxDuration = 300;
 
 type Ctx = { params: Promise<{ id: string }> };
 

@@ -6,7 +6,8 @@ import { executeStep } from "@/lib/engine/run-workflow";
 import { isNodeKey } from "@/lib/nodes/registry";
 import { isCustomKey } from "@/lib/nodes/custom";
 
-export const maxDuration = 60;
+// Satu analisis bisa butuh beberapa panggilan AI (masing-masing ≤ LLM_CALL_TIMEOUT_MS). 300 dtk = batas Vercel (Fluid Compute) paket Hobby.
+export const maxDuration = 300;
 
 type Ctx = { params: Promise<{ id: string }> };
 const Body = z.object({ key: z.string().optional() });

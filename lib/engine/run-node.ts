@@ -164,7 +164,8 @@ export async function recoverStuckNodes(runId: string) {
   const db = await getDb();
   const running = await db.select().from(schema.nodeRuns).where(and(eq(schema.nodeRuns.runId, runId), eq(schema.nodeRuns.status, "running")));
   const local = (process.env.DATABASE_URL ?? "pglite").startsWith("pglite");
-  const limit = Number(process.env.STUCK_AFTER_MS ?? 15 * 60 * 1000);
+  // Di Vercel fungsi dihentikan paksa setelah maxDuration (300 dtk) → node yang masih "running" setelah ±6 menit pasti terhenti.
+  const limit = Number(process.env.STUCK_AFTER_MS ?? (process.env.VERCEL ? 6 * 60 * 1000 : 15 * 60 * 1000));
   const stuck = running.filter((n) => !ACTIVE.has(n.id) && (local || Date.now() - +new Date(n.startedAt ?? 0) > limit));
   for (const n of stuck)
     await db

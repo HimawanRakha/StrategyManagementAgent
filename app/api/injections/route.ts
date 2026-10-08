@@ -7,7 +7,8 @@ import { INJECTORS, injectorsFor } from "@/lib/experiment/injectors";
 import { runInjection } from "@/lib/experiment/run-injection";
 import { NODES, NODE_KEYS } from "@/lib/nodes/registry";
 
-export const maxDuration = 60;
+// Satu analisis bisa butuh beberapa panggilan AI (masing-masing ≤ LLM_CALL_TIMEOUT_MS). 300 dtk = batas Vercel (Fluid Compute) paket Hobby.
+export const maxDuration = 300;
 
 /** Analisis yang bisa disuntik: disusun AI (bukan kalkulator kode) dan punya validator. */
 const CODE_NODES = new Set<string>(["posisi_organisasi", "grand_design"]);
