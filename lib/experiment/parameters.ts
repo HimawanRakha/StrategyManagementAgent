@@ -110,15 +110,16 @@ export async function computeParameters(opts: { tag?: string; model?: string } =
     GROUP BY node_key`);
 
   const cv = await queryRows<{ node_key: string; avg_tokens: number; n: number }>(sql`
-    SELECT nr.node_key, AVG(t.tokens)::float AS avg_tokens, COUNT(*)::int AS n
+    SELECT nr.node_key, AVG(COALESCE(t.tokens, 0))::float AS avg_tokens, COUNT(*)::int AS n
     FROM node_runs nr
-    JOIN (
+    LEFT JOIN (
       SELECT node_run_id, SUM(tokens_in + tokens_out) AS tokens
       FROM llm_calls
       WHERE purpose IN ('validate', 'repair') AND injection_id IS NULL
       GROUP BY node_run_id
     ) t ON t.node_run_id = nr.id
-    WHERE nr.validator_enabled ${runFilter(runIds, sql`nr.run_id`)}
+    -- Semua node run yang validatornya aktif dan sudah selesai: pemeriksaan program saja (tanpa AI) tercatat 0 token.
+    WHERE nr.validator_enabled AND nr.status = 'done' ${runFilter(runIds, sql`nr.run_id`)}
     GROUP BY nr.node_key`);
 
   const gen = await queryRows<{ node_key: string; avg_tokens: number }>(sql`

@@ -649,6 +649,7 @@ function SourceTag({ src, edited, bad, loading }: { src: Source; edited: boolean
           </span>
         )}
         {src.few && <div className="text-warn">data sedikit</div>}
+        {src.note && <div className="text-muted">{src.note}</div>}
       </div>
     );
   if (src.kind === "asumsi")

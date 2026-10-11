@@ -436,6 +436,8 @@ export type Source =
       via?: "nyata" | "uji sisip";
       /** e = 0 dengan data sedikit: belum membuktikan tidak pernah keliru. */
       few?: boolean;
+      /** Keterangan tambahan singkat. */
+      note?: string;
     }
   | {
       kind: "asumsi";
@@ -481,12 +483,18 @@ export function stageDefault(key: string, params: ParamsApi | null): StageDefaul
       ? { value: obs.dr, src: { kind: "terukur", n: obs.nOn + obs.nOff, via: "nyata" } }
       : m && dN >= MIN_N_USE && finite(m.dr)
         ? { value: m.dr, src: { kind: "terukur", n: dN, via: "uji sisip" } }
-        : assumed(ASSUMED.dr, ASSUMED_WHY.dr, dN || undefined, dN ? `uji sisip baru ${dN}, perlu ≥ ${MIN_N_USE}` : "belum diuji sisip");
+        : assumed(
+            ASSUMED.dr,
+            ASSUMED_WHY.dr,
+            dN || undefined,
+            // Validator yang sudah dipasang belum tentu terukur dayanya: perlu kesalahan untuk ditangkap.
+            `${m?.cTokN ? `validator sudah dipasang di ${m.cTokN} run, tetapi kesalahannya terlalu jarang untuk mengukur daya tangkapnya; ` : ""}${dN ? `uji sisip baru ${dN}, perlu ≥ ${MIN_N_USE}` : "belum diuji sisip"}`,
+          );
 
   const cTok: StageParam = !hasVal
     ? { value: 0, src: { kind: "tidak ada" } }
-    : m && m.cTokN > 0 && finite(m.cTok) && m.cTok > 0
-      ? { value: m.cTok, src: { kind: "terukur", n: m.cTokN } }
+    : m && m.cTokN > 0 && finite(m.cTok)
+      ? { value: m.cTok, src: { kind: "terukur", n: m.cTokN, ...(m.cTok === 0 ? { note: "diperiksa program, tanpa token AI" } : {}) } }
       : assumed(ASSUMED.cTok, ASSUMED_WHY.cTok, undefined, "validator belum pernah dipasang");
 
   const cMin: StageParam =
