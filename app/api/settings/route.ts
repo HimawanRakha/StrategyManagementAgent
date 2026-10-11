@@ -15,8 +15,6 @@ export const GET = handle(async () => {
       model: await getSetting<string>("model", ""),
       temperature: await getSetting<number>("temperature", Number(process.env.LLM_TEMPERATURE ?? 0.2)),
       dh: await getSetting<number>("dh", 0.85),
-      budgetTokens: await getSetting<number>("budgetTokens", 3000),
-      budgetMinutes: await getSetting<number>("budgetMinutes", 8),
       codebook: await getSetting("codebook", DEFAULT_CODEBOOK),
     },
     // Hanya status konfigurasi; nilai API key tidak pernah dikirim ke browser.
@@ -39,8 +37,6 @@ const Body = z.object({
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   dh: z.number().min(0).max(1).optional(),
-  budgetTokens: z.number().min(0).optional(),
-  budgetMinutes: z.number().min(0).optional(),
   codebook: z.object({ version: z.string().min(1), text: z.string().min(10) }).optional(),
 });
 

@@ -8,8 +8,6 @@ type Settings = {
   model: string;
   temperature: number;
   dh: number;
-  budgetTokens: number;
-  budgetMinutes: number;
   codebook: { version: string; text: string };
 };
 type Env = {
@@ -52,8 +50,6 @@ function SettingsForm({ initial, env }: { initial: Settings; env: Env }) {
   const [model, setModel] = useState(initial.model ?? "");
   const [temperature, setTemperature] = useState(String(initial.temperature));
   const [dh, setDh] = useState(String(initial.dh));
-  const [budgetTokens, setBudgetTokens] = useState(String(initial.budgetTokens));
-  const [budgetMinutes, setBudgetMinutes] = useState(String(initial.budgetMinutes));
   const [version, setVersion] = useState(initial.codebook?.version ?? "");
   const [text, setText] = useState(initial.codebook?.text ?? "");
   const [busy, setBusy] = useState(false);
@@ -63,13 +59,9 @@ function SettingsForm({ initial, env }: { initial: Settings; env: Env }) {
   const num = (s: string) => (s.trim() === "" ? NaN : Number(s.replace(",", ".")));
   const t = num(temperature);
   const d = num(dh);
-  const bt = num(budgetTokens);
-  const bm = num(budgetMinutes);
   const problems: string[] = [];
   if (!(t >= 0 && t <= 2)) problems.push("Suhu harus 0–2.");
   if (!(d >= 0 && d <= 1)) problems.push("Daya deteksi manusia harus 0–1.");
-  if (!(bt >= 0)) problems.push("Anggaran token harus ≥ 0.");
-  if (!(bm >= 0)) problems.push("Anggaran menit harus ≥ 0.");
   if (!version.trim()) problems.push("Versi codebook wajib diisi.");
   if (text.trim().length < 10) problems.push("Teks codebook minimal 10 karakter.");
   const codebookChanged = version !== base?.version || text !== base?.text;
@@ -82,7 +74,7 @@ function SettingsForm({ initial, env }: { initial: Settings; env: Env }) {
     try {
       await api("/api/settings", {
         method: "PUT",
-        body: { model: model.trim(), temperature: t, dh: d, budgetTokens: bt, budgetMinutes: bm, codebook: { version: version.trim(), text } },
+        body: { model: model.trim(), temperature: t, dh: d, codebook: { version: version.trim(), text } },
       });
       setSaved(true);
       setBase({ version: version.trim(), text });
@@ -106,16 +98,13 @@ function SettingsForm({ initial, env }: { initial: Settings; env: Env }) {
         </div>
       </Card>
 
-      <Card title="Parameter eksperimen" subtitle="Dipakai model propagasi galat dan pengoptimal penempatan validator/tinjauan manusia.">
+      <Card
+        title="Parameter eksperimen"
+        subtitle="Dipakai model propagasi galat dan pengoptimal penempatan validator/tinjauan manusia. Anggaran token dan menit diatur di Laporan run (disarankan otomatis) dan di tab Optimasi."
+      >
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Daya deteksi manusia (dₕ)" hint="Peluang tinjauan manusia menangkap galat, 0–1.">
+          <Field label="Daya deteksi manusia (dₕ)" hint="Peluang tinjauan manusia menangkap galat, 0–1. Masih asumsi sampai diukur dari tinjauan sungguhan.">
             <Input type="number" step="0.01" min={0} max={1} value={dh} onChange={(e) => setDh(e.target.value)} />
-          </Field>
-          <Field label="Anggaran token validator" hint="Total token tambahan untuk validator per run.">
-            <Input type="number" step="100" min={0} value={budgetTokens} onChange={(e) => setBudgetTokens(e.target.value)} />
-          </Field>
-          <Field label="Anggaran menit tinjauan" hint="Total menit tinjauan manusia per run.">
-            <Input type="number" step="1" min={0} value={budgetMinutes} onChange={(e) => setBudgetMinutes(e.target.value)} />
           </Field>
         </div>
       </Card>

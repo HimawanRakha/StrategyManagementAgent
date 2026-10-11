@@ -6,14 +6,15 @@
 // Angka model penempatan TIDAK bergantung pada penempatan sekarang (terukur dari eksperimen → asumsi tetap), edit pengguna
 // disimpan per proyek, dan optimasinya deterministik — jadi rekomendasi sama setiap kali laporan dibuka.
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { Badge, Button, cx } from "@/components/ui";
-import { useApi } from "@/lib/client/api";
+import { Badge, Button, Empty, Select, cx } from "@/components/ui";
+import { fmt, useApi } from "@/lib/client/api";
 import type { WorkflowGraph } from "@/lib/db/schema";
 import { labelOf } from "@/lib/engine/canvas";
 import { NODE_KEYS } from "@/lib/nodes/meta";
 import type { Choice, Stage } from "@/lib/experiment/propagation";
 import {
   FIELDS,
+  averageSummaries,
   buildConclusion,
   buildStages,
   changeWords,
@@ -22,6 +23,7 @@ import {
   dhDefault,
   inertValidators,
   loadSettings,
+  mergeFindings,
   optimizableKeys,
   parseNumber,
   runModel,
@@ -43,6 +45,15 @@ import { FormulasSection, RecommendationSection, type ModelControls } from "./re
 export type { ReportProjectData } from "./report-utils";
 
 type Placement = Record<string, { validator: boolean; human: boolean }>;
+
+/** Tag run utama (sama dengan MAIN_TAG di server). */
+const MAIN = "utama";
+const EMPTY_RUN: ReportProjectData = { runId: null, nodes: {}, questions: [] };
+type RunGroup ={ tag: string; runs: { id: string; status: string; createdAt: string; done: number; total: number }[] };
+
+/** Nama jenis run di pilihan: run utama, arsip, atau tag eksperimen. */
+const tagLabel = (g: RunGroup) =>
+  g.tag === MAIN ? "Run utama (canvas)" : g.tag === "arsip" ? `Arsip run utama (${g.runs.length} run)` : `Eksperimen: ${g.tag} (${g.runs.length} run)`;
 
 const SECTIONS = [
   { id: "cara-baca", label: "Cara membaca" },
@@ -69,12 +80,39 @@ export function ReportPanel(props: {
   onSelectNode?: (engineKey: string) => void;
   onClose: () => void;
 }) {
-  const { projectId, graph, data, running, onClose } = props;
+  const { projectId, graph, running, onClose } = props;
   const uid = useId();
 
-  // ---------- Data run ----------
-  const summary = useMemo(() => summarize(graph, data), [graph, data]);
-  const findings = useMemo(() => collectFindings(graph, data), [graph, data]);
+  // ---------- Pilihan run: run utama (data canvas, langsung diperbarui) atau run lain per tag ----------
+  const runList = useApi<{ groups: RunGroup[] }>(`/api/projects/${projectId}/report-runs`);
+  const [tagSel, setTagSel] = useState(MAIN);
+  const [pick, setPick] = useState<string>("avg"); // "avg" = rata-rata semua run bertag ini, atau id satu run
+  const group = runList.data?.groups.find((g) => g.tag === tagSel);
+  const isMain = tagSel === MAIN;
+  const groupRuns = group?.runs ?? [];
+  const selectedIds = isMain ? [] : pick === "avg" ? groupRuns.map((r) => r.id) : groupRuns.some((r) => r.id === pick) ? [pick] : [];
+  const other = useApi<{ runs: ReportProjectData[] }>(selectedIds.length ? `/api/projects/${projectId}/report-runs?runIds=${selectedIds.join(",")}` : null);
+
+  // Run utama: pertanyaan AI hanya dari node run di run utama (pertanyaan run eksperimen tidak ikut terhitung).
+  const mainData = useMemo<ReportProjectData>(() => {
+    const ids = new Set(Object.values(props.data.nodes).map((n) => n.nodeRunId));
+    return { ...props.data, questions: props.data.questions.filter((q) => !q.nodeRunId || ids.has(q.nodeRunId)) };
+  }, [props.data]);
+  const loaded = other.data?.runs;
+  const datasets = useMemo<ReportProjectData[]>(() => (isMain ? [mainData] : loaded?.length ? loaded : [EMPTY_RUN]), [isMain, mainData, loaded]);
+  const loadingRuns = !isMain && (other.loading || !loaded?.length);
+  const data = datasets[0];
+
+  // ---------- Data run (rata-rata bila beberapa run) ----------
+  const summary = useMemo(() => averageSummaries(datasets.map((d) => summarize(graph, d))), [graph, datasets]);
+  const groups = runList.data?.groups;
+  const findings = useMemo(() => {
+    // "Run 3" = urutan run di dalam tag (menurut waktu dibuat).
+    const order = (groups?.find((g) => g.tag === tagSel)?.runs ?? []).map((r) => r.id);
+    const labels = datasets.map((d) => `Run ${Math.max(1, order.indexOf(d.runId ?? "") + 1)}`);
+    return mergeFindings(datasets.map((d) => collectFindings(graph, d)), labels);
+  }, [graph, datasets, groups, tagSel]);
+  const averaged = datasets.length > 1 ? datasets.length : undefined;
 
   // ---------- Angka model (disimpan per proyek) ----------
   // Profil parameter sesuai model AI canvas (LLM_MODEL di server); profil kosong → semua asumsi.
@@ -222,16 +260,52 @@ export function ReportPanel(props: {
         ))}
       </nav>
 
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2/50 px-4 py-2 text-xs">
+        <span className="font-medium text-muted">Laporan untuk</span>
+        <Select
+          aria-label="Jenis run"
+          className="h-8 w-auto min-w-44 text-xs"
+          value={tagSel}
+          onChange={(e) => {
+            setTagSel(e.target.value);
+            setPick("avg");
+          }}
+        >
+          {(runList.data?.groups ?? [{ tag: MAIN, runs: [] }]).map((g) => (
+            <option key={g.tag} value={g.tag}>
+              {tagLabel(g)}
+            </option>
+          ))}
+        </Select>
+        {!isMain && groupRuns.length > 1 && (
+          <Select aria-label="Run" className="h-8 w-auto min-w-44 text-xs" value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="avg">Rata-rata {groupRuns.length} run</option>
+            {groupRuns.map((r, i) => (
+              <option key={r.id} value={r.id}>
+                Run {i + 1} · {fmt.date(r.createdAt)} · {r.done}/{r.total} selesai
+              </option>
+            ))}
+          </Select>
+        )}
+        {!isMain && groupRuns.length === 1 && <span className="text-muted">{fmt.date(groupRuns[0].createdAt)}</span>}
+        {!isMain && <span className="text-muted">Rekomendasi (bagian 5) tetap untuk canvas sekarang.</span>}
+        {runList.error && <span className="text-danger">Daftar run gagal dimuat: {runList.error}</span>}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-8 p-4">
           <Section id={`${uid}-cara-baca`} n={1} title="Cara membaca laporan ini">
             <HowToRead />
           </Section>
           <Section id={`${uid}-ringkasan`} n={2} title="Ringkasan run">
-            <SummarySection graph={graph} data={data} summary={summary} running={running} onSelectNode={props.onSelectNode} />
+            {loadingRuns ? (
+              <Empty>{other.error ? `Gagal memuat run: ${other.error}` : "Memuat data run…"}</Empty>
+            ) : (
+              <SummarySection graph={graph} data={data} summary={summary} running={isMain && running} onSelectNode={props.onSelectNode} averagedOver={averaged} />
+            )}
           </Section>
           <Section id={`${uid}-galat`} n={3} title="Galat & temuan">
-            <FindingsSection data={data} findings={findings} onSelectNode={props.onSelectNode} />
+            {loadingRuns ? <Empty>Memuat data run…</Empty> : <FindingsSection data={data} findings={findings} onSelectNode={props.onSelectNode} runCount={datasets.length} />}
           </Section>
           <Section id={`${uid}-rumus`} n={4} title="Rumus yang dipakai">
             <FormulasSection graph={graph} data={data} model={model} />
@@ -239,7 +313,7 @@ export function ReportPanel(props: {
           <Section id={`${uid}-rekomendasi`} n={5} title="Rekomendasi penempatan validator & tinjauan">
             <RecommendationSection
               graph={graph}
-              data={data}
+              data={averaged ? { runId: data.runId, nodes: {}, questions: [] } : data}
               running={running}
               model={model}
               changes={changes}

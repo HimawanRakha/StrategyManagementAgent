@@ -40,7 +40,7 @@ export type ReportNode = {
 export type ReportProjectData = {
   runId: string | null;
   nodes: Record<string, ReportNode>;
-  questions: { id: string; nodeKey: string; question: string; answer: string | null }[];
+  questions: { id: string; nodeKey: string; question: string; answer: string | null; nodeRunId?: string }[];
 };
 
 /** Respons GET /api/experiments/parameters (hanya kolom yang dipakai; NaN menjadi null setelah JSON). */
@@ -824,4 +824,60 @@ export function buildConclusion(input: {
           : { tone: "ok", text: "Siap dipakai sebagai draf: tidak ada galat yang tersisa menurut pemeriksaan." };
 
   return { completeness, errors, attention, estimate, nextSteps: steps, verdict };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Beberapa run sekaligus (mis. 5 run eksperimen bertag sama): rata-rata ringkasan & gabungan temuan
+
+/** Rata-rata ringkasan per run (angka bisa pecahan, mis. 0,8 tinjauan per run). */
+export function averageSummaries(list: RunSummary[]): RunSummary {
+  if (list.length === 1) return list[0];
+  const n = list.length || 1;
+  const avg = (f: (s: RunSummary) => number) => list.reduce((a, s) => a + f(s), 0) / n;
+  const statusKeys = [...new Set(list.flatMap((s) => Object.keys(s.status)))];
+  const reviewsDone = avg((s) => s.reviews.done);
+  const reviewMin = avg((s) => s.reviews.minutes);
+  return {
+    total: avg((s) => s.total),
+    done: avg((s) => s.done),
+    status: Object.fromEntries(statusKeys.map((k) => [k, avg((s) => s.status[k] ?? 0)])),
+    tokens: { gen: avg((s) => s.tokens.gen), check: avg((s) => s.tokens.check), other: avg((s) => s.tokens.other), total: avg((s) => s.tokens.total) },
+    duration: { sec: avg((s) => s.duration.sec), n: avg((s) => s.duration.n) },
+    validator: { pass: avg((s) => s.validator.pass), fail: avg((s) => s.validator.fail), unchecked: avg((s) => s.validator.unchecked) },
+    reviews: {
+      count: avg((s) => s.reviews.count),
+      done: reviewsDone,
+      open: avg((s) => s.reviews.open),
+      approved: avg((s) => s.reviews.approved),
+      rejected: avg((s) => s.reviews.rejected),
+      minutes: reviewMin,
+      avg: reviewsDone ? reviewMin / reviewsDone : null,
+    },
+    openQuestions: avg((s) => s.openQuestions),
+    formatFailures: avg((s) => s.formatFailures),
+  };
+}
+
+/** Gabungkan temuan beberapa run per analisis; judul setiap temuan diberi nama run-nya agar tidak ada yang tersembunyi. */
+export function mergeFindings(list: FindingsReport[], runLabels: string[]): FindingsReport {
+  if (list.length === 1) return list[0];
+  const byKey = new Map<string, AnalysisFindings>();
+  list.forEach((rep, i) => {
+    for (const g of rep.groups) {
+      const cur = byKey.get(g.key) ?? { key: g.key, label: g.label, status: g.status, findings: [], counts: { berat: 0, sedang: 0, catatan: 0 } };
+      // Status gabungan: yang paling bermasalah (gagal > menunggu > berjalan > belum > selesai).
+      const rank = (s: string) => ["failed", "needs_review", "running", "pending", "none", "done"].indexOf(s);
+      if (rank(g.status) >= 0 && (rank(cur.status) < 0 || rank(g.status) < rank(cur.status))) cur.status = g.status;
+      for (const f of g.findings) {
+        cur.findings.push({ ...f, title: `${runLabels[i]} · ${f.title}` });
+        cur.counts[f.severity]++;
+      }
+      byKey.set(g.key, cur);
+    }
+  });
+  const groups = [...byKey.values()].map((g) => ({ ...g, findings: [...g.findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)) }));
+  const totals = { berat: 0, sedang: 0, catatan: 0 } as Record<Severity, number>;
+  for (const g of groups) for (const s of SEVERITY_ORDER) totals[s] += g.counts[s];
+  const byKind = (kind: FindingKind) => groups.filter((g) => g.findings.some((x) => x.kind === kind));
+  return { groups, totals, byKind };
 }

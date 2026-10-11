@@ -97,24 +97,35 @@ export function SummarySection({
   summary: s,
   running,
   onSelectNode,
+  averagedOver,
 }: {
   graph: WorkflowGraph;
   data: ReportProjectData;
   summary: RunSummary;
   running: boolean;
   onSelectNode?: (k: string) => void;
+  /** Bila diisi: ringkasan adalah rata-rata per run dari sejumlah run ini. */
+  averagedOver?: number;
 }) {
   if (!data.runId) return <Empty>{NO_RUN}</Empty>;
   const pct = s.total ? s.done / s.total : 0;
   const { rowKeys, canvasKeys } = reportKeys(graph, data);
+  const avg = !!averagedOver && averagedOver > 1;
+  // Rata-rata bisa pecahan (mis. 0,8 tinjauan per run): tampilkan satu desimal bila tidak bulat.
+  const cnt = (x: number) => (avg && Math.abs(x - Math.round(x)) > 1e-9 ? fmt.num(x, 1) : fmt.int(x));
 
   return (
     <div className="space-y-4">
+      {avg && (
+        <p className="rounded-md border border-primary/30 bg-primary-soft/40 px-3 py-2 text-xs leading-relaxed">
+          Angka di bawah adalah <b>rata-rata per run</b> dari {averagedOver} run. Pilih satu run di atas untuk melihat rincian per analisis.
+        </p>
+      )}
       <div className="rounded-md border border-border px-3 py-3">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs font-medium text-muted">Kemajuan</span>
           <span className="text-sm font-semibold tabular-nums">
-            {fmt.int(s.done)} dari {fmt.int(s.total)} analisis selesai
+            {cnt(s.done)} dari {cnt(s.total)} analisis selesai
           </span>
         </div>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuemin={0} aria-valuemax={s.total} aria-valuenow={s.done}>
@@ -123,7 +134,7 @@ export function SummarySection({
         <div className="mt-2 flex flex-wrap gap-1.5">
           {STATUS_ORDER.filter((x) => s.status[x.id]).map((x) => (
             <Badge key={x.id} tone={x.tone}>
-              {x.label} <span className="tabular-nums">{fmt.int(s.status[x.id])}</span>
+              {x.label} <span className="tabular-nums">{cnt(s.status[x.id])}</span>
             </Badge>
           ))}
         </div>
@@ -140,28 +151,28 @@ export function SummarySection({
             </>
           }
         />
-        <Stat label="Total waktu kerja AI" value={fmtDuration(s.duration.sec)} hint={`jumlah dari ${fmt.int(s.duration.n)} analisis yang selesai`} />
+        <Stat label="Total waktu kerja AI" value={fmtDuration(s.duration.sec)} hint={`jumlah dari ${cnt(s.duration.n)} analisis yang selesai`} />
         <Stat
           label="Pemeriksaan otomatis (validator)"
           value={
             <span className="flex flex-wrap items-baseline gap-x-2 text-base">
-              <span className="text-ok">{fmt.int(s.validator.pass)} lolos</span>
-              <span className="text-danger">{fmt.int(s.validator.fail)} tidak</span>
+              <span className="text-ok">{cnt(s.validator.pass)} lolos</span>
+              <span className="text-danger">{cnt(s.validator.fail)} tidak</span>
             </span>
           }
-          hint={`${fmt.int(s.validator.unchecked)} analisis tidak diperiksa validator`}
+          hint={`${cnt(s.validator.unchecked)} analisis tidak diperiksa validator`}
         />
         <Stat
           label="Tinjauan manusia"
-          value={`${fmt.int(s.reviews.count)} kali`}
+          value={`${cnt(s.reviews.count)} kali`}
           hint={
             s.reviews.count
-              ? `${s.reviews.approved} disetujui · ${s.reviews.rejected} ditolak${s.reviews.done ? ` · total ${fmt.num(s.reviews.minutes, 1)} mnt` : ""}${s.reviews.open ? ` · ${s.reviews.open} masih berjalan` : ""}`
+              ? `${cnt(s.reviews.approved)} disetujui · ${cnt(s.reviews.rejected)} ditolak${s.reviews.done ? ` · total ${fmt.num(s.reviews.minutes, 1)} mnt` : ""}${s.reviews.open ? ` · ${cnt(s.reviews.open)} masih berjalan` : ""}`
               : "belum ada"
           }
         />
-        <Stat label="Pertanyaan AI terbuka" value={fmt.int(s.openQuestions)} hint={s.openQuestions ? "lihat bagian Galat & temuan" : "semua sudah dijawab"} />
-        <Stat label="Jawaban AI tak terbaca" value={fmt.int(s.formatFailures)} hint="diminta ulang otomatis; bukan galat isi" />
+        <Stat label="Pertanyaan AI terbuka" value={cnt(s.openQuestions)} hint={s.openQuestions ? "lihat bagian Galat & temuan" : "semua sudah dijawab"} />
+        <Stat label="Jawaban AI tak terbaca" value={cnt(s.formatFailures)} hint="diminta ulang otomatis; bukan galat isi" />
       </div>
 
       <p className="text-xs leading-relaxed text-muted">
@@ -169,6 +180,7 @@ export function SummarySection({
         <Term>Lainnya</Term> mis. penilaian makna oleh AI. <Term>Waktu kerja</Term> dihitung dari mulai sampai selesai tiap analisis.
       </p>
 
+      {!avg && (
       <details className="group rounded-md border border-border" open={rowKeys.length <= 12}>
         <summary className="cursor-pointer px-3 py-2 text-sm font-medium">Rincian per analisis ({rowKeys.length})</summary>
         <div className="border-t border-border p-2">
@@ -201,6 +213,7 @@ export function SummarySection({
           </Table>
         </div>
       </details>
+      )}
     </div>
   );
 }
@@ -235,7 +248,18 @@ function ReviewWords({ n }: { n: ReportNode | undefined }) {
 // ---------------------------------------------------------------------------------------------
 // 3. Galat & temuan
 
-export function FindingsSection({ data, findings, onSelectNode }: { data: ReportProjectData; findings: FindingsReport; onSelectNode?: (k: string) => void }) {
+export function FindingsSection({
+  data,
+  findings,
+  onSelectNode,
+  runCount = 1,
+}: {
+  data: ReportProjectData;
+  findings: FindingsReport;
+  onSelectNode?: (k: string) => void;
+  /** Jumlah run yang temuannya digabung. */
+  runCount?: number;
+}) {
   const [showNotes, setShowNotes] = useState(true);
   if (!data.runId) return <Empty>{NO_RUN}</Empty>;
   const t = findings.totals;
@@ -245,7 +269,7 @@ export function FindingsSection({ data, findings, onSelectNode }: { data: Report
   return (
     <div className="space-y-3">
       <p className="text-sm leading-relaxed">
-        Semua masalah yang tercatat di run ini, dikelompokkan per analisis sesuai urutan alur. Tidak ada yang disembunyikan: setiap pemeriksaan yang gagal,
+        Semua masalah yang tercatat di {runCount > 1 ? `${runCount} run ini (judul setiap temuan diawali nama run-nya; jumlah di bawah adalah total, bukan rata-rata)` : "run ini"}, dikelompokkan per analisis sesuai urutan alur. Tidak ada yang disembunyikan: setiap pemeriksaan yang gagal,
         pesan rinciannya, dan masalah yang sudah diperbaiki otomatis ikut ditampilkan.
       </p>
       <div className="flex flex-wrap items-center gap-2">
