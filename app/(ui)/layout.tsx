@@ -15,16 +15,13 @@ export default async function UiLayout({ children }: LayoutProps<"/">) {
       <header className="sticky top-0 z-30 border-b border-border bg-surface/95 backdrop-blur">
         <div className="flex h-12 items-center gap-4 px-4">
           <Link href="/projects" className="flex items-center gap-2 font-semibold tracking-tight">
-            <span className="grid size-7 place-items-center rounded-md bg-primary text-xs font-bold text-white">SA</span>
-            <span className="hidden sm:inline">Strategi Agen</span>
+            {/* <span className="grid size-7 place-items-center rounded-md bg-primary text-xs font-bold text-white">SA</span> */}
+            <span className="hidden sm:inline">Manajemen Strategi Agen AI </span>
           </Link>
           <NavLinks />
           <div className="ml-auto flex items-center gap-2">
             {provider === "mock" && (
-              <span
-                className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-medium text-warn"
-                title="LLM tiruan: tanpa API key, hasil dari heuristik kata kunci — hanya untuk mencoba alur"
-              >
+              <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-medium text-warn" title="LLM tiruan: tanpa API key, hasil dari heuristik kata kunci — hanya untuk mencoba alur">
                 Mode uji (tanpa AI)
               </span>
             )}

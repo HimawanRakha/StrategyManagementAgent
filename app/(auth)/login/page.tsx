@@ -24,21 +24,15 @@ export default async function LoginPage(props: PageProps<"/login">) {
     <main className="grid min-h-screen place-items-center px-4">
       <form action={login} className="w-full max-w-sm rounded-xl border border-border bg-surface p-6">
         <div className="mb-5 flex items-center gap-2">
-          <span className="grid size-8 place-items-center rounded-md bg-primary text-sm font-bold text-white">SA</span>
+          {/* <span className="grid size-8 place-items-center rounded-md bg-primary text-sm font-bold text-white">SA</span> */}
           <div>
-            <h1 className="font-semibold">Strategi Agen</h1>
+            <h1 className="font-semibold">Strategi Agen AI </h1>
             <p className="text-xs text-muted">Penyusun rencana strategis dengan alur berpikir</p>
           </div>
         </div>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-xs font-medium text-muted">Kata sandi tim</span>
-          <input
-            name="password"
-            type="password"
-            required
-            autoFocus
-            className="h-10 rounded-md border border-border px-3 text-sm outline-none focus:border-primary"
-          />
+          <input name="password" type="password" required autoFocus className="h-10 rounded-md border border-border px-3 text-sm outline-none focus:border-primary" />
         </label>
         {error && <p className="mt-2 text-sm text-danger">Kata sandi salah.</p>}
         <button className="mt-4 h-10 w-full rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover">Masuk</button>
