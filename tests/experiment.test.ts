@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { cohenKappa } from "@/lib/experiment/kappa";
 import { wilson } from "@/lib/experiment/wilson";
-import { estimateE } from "@/lib/experiment/estimate";
-import { predictMarkov, predictP, type Stage } from "@/lib/experiment/propagation";
+import { estimateDrObserved, estimateE, reviewMinutesFrom, type VerdictRow } from "@/lib/experiment/estimate";
+import { predictInterval, predictMarkov, predictP, type Stage } from "@/lib/experiment/propagation";
 import { optimize, optimizeDP, OPTIONS } from "@/lib/experiment/optimize";
 import { seededRng, simulateP } from "@/lib/experiment/simulate";
 import { INJECTORS, fakeId, inject, injectorsFor, pathText } from "@/lib/experiment/injectors";
@@ -14,11 +14,13 @@ import { templateGraph } from "@/lib/engine/canvas";
 import type { EvidenceChunk } from "@/lib/db/schema";
 import {
   bestPlacement,
+  buildStages,
   buildConclusion,
   collectFindings,
   placementToApply,
   runModel,
   stageDefault,
+  suggestBudget,
   summarize,
   type ParamsApi,
   type ReportProjectData,
@@ -283,7 +285,7 @@ describe("Laporan: angka model, optimasi, galat, kesimpulan", () => {
       stages: [{ key: "qspm", e: { p: 0.1, n: 12 }, d: { n: 2 }, dr: 0.9, cTok: 2000, cTokN: 4, cMin: 0, cMinN: 0 }],
     };
     const d = stageDefault("qspm", params);
-    expect(d.e).toEqual({ value: 0.1, src: { kind: "terukur", n: 12 } });
+    expect(d.e).toEqual({ value: 0.1, src: { kind: "terukur", n: 12 }, kn: { k: 1, n: 12 } });
     expect(d.cMin.value).toBe(ASSUMED.cMin);
     expect(d.cMin.src.kind).toBe("asumsi");
     const none2 = stageDefault("cascading", null);
@@ -359,5 +361,103 @@ describe("Laporan: angka model, optimasi, galat, kesimpulan", () => {
     expect(c1.verdict.tone).toBe("danger");
     expect(c1.attention[0].severity).toBe("berat");
     expect(c1.nextSteps.join(" ")).toMatch(/AHP/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Menyamakan rekomendasi website dengan hasil eksperimen
+
+describe("Parameter terukur: kustom, d×r nyata, tinjauan, anggaran, rentang keyakinan", () => {
+  it("analisis kustom ikut memakai angka terukur (n ≥ 3), dengan rentang Wilson dan tanda data sedikit", () => {
+    const params: ParamsApi = {
+      dh: 0.85,
+      stages: [
+        { key: "custom_abc", e: { p: 0, n: 16, lo: 0, hi: 0.194, k: 0 }, dr: 0, cTok: 0, cTokN: 0, cMin: 0, cMinN: 0 },
+        { key: "custom_kecil", e: { p: 0, n: 4, lo: 0, hi: 0.49, k: 0 }, dr: 0, cTok: 0, cTokN: 0, cMin: 0, cMinN: 0 },
+        { key: "cascading", e: { p: 0.25, n: 4, lo: 0.046, hi: 0.699, k: 1 }, dr: 0.667, d: { n: 6 }, cTok: 3933, cTokN: 15, cMin: 0, cMinN: 0 },
+      ],
+    };
+    const a = stageDefault("custom_abc", params);
+    expect(a.e.value).toBe(0);
+    expect(a.e.src).toMatchObject({ kind: "terukur", n: 16, hi: 0.194 });
+    expect(a.e.src).not.toHaveProperty("few");
+    expect(stageDefault("custom_kecil", params).e.src).toMatchObject({ kind: "terukur", few: true });
+    // n = 4 (dulu < 5 → asumsi 0,15) kini terukur
+    expect(stageDefault("cascading", params).e.value).toBe(0.25);
+    // Analisis kustom dengan e = 0 tidak lagi diberi pemeriksaan oleh optimasi
+    const st = buildStages(["custom_abc", "cascading"], { custom_abc: a, cascading: stageDefault("cascading", params) }, {});
+    const r = bestPlacement(st, 0.85, 10000, 10);
+    expect(r.place.custom_abc).toEqual({ validator: false, human: false });
+  });
+
+  it("d×r nyata: 1 − keliru(dengan validator) ÷ keliru(tanpa validator); butuh ≥ 5 per kondisi", () => {
+    const rows = (key: string, on: [number, number], off: [number, number]): VerdictRow[] => [
+      ...Array.from({ length: on[1] }, (_, i) => ({ node_key: key, own_error: i < on[0], validator_enabled: true })),
+      ...Array.from({ length: off[1] }, (_, i) => ({ node_key: key, own_error: i < off[0], validator_enabled: false })),
+    ];
+    const sep = estimateDrObserved(rows("msdm_separation", [1, 5], [7, 16]), "msdm_separation");
+    expect(sep?.dr).toBeCloseTo(1 - 1 / 5 / (7 / 16), 6); // ≈ 0,54
+    const cas = estimateDrObserved(rows("cascading", [3, 16], [2, 5]), "cascading");
+    expect(cas?.dr).toBeCloseTo(1 - 3 / 16 / (2 / 5), 6); // ≈ 0,53
+    expect(estimateDrObserved(rows("x", [0, 4], [3, 10]), "x")).toBeNull(); // dengan validator baru 4
+    expect(estimateDrObserved(rows("x", [1, 10], [0, 10]), "x")).toBeNull(); // tanpa validator tidak pernah keliru
+    expect(estimateDrObserved(rows("x", [0, 10], [1, 10]), "x")).toBeNull(); // baru 1 kekeliruan: rasio ditentukan kebetulan
+    expect(estimateDrObserved(rows("x", [5, 5], [2, 10]), "x")?.dr).toBe(0); // dibatasi ke [0, 1]
+
+    // Prioritas di laporan: nyata → uji sisip → asumsi
+    const params: ParamsApi = {
+      dh: 0.85,
+      stages: [{ key: "cascading", e: { p: 0.25, n: 4, k: 1 }, d: { n: 6 }, dr: 0.667, drObserved: { dr: 0.531, nOn: 16, nOff: 5 }, cTok: 3933, cTokN: 15, cMin: 0, cMinN: 0 }],
+    };
+    expect(stageDefault("cascading", params).dr).toMatchObject({ value: 0.531, src: { kind: "terukur", via: "nyata", n: 21 } });
+    params.stages[0].drObserved = null;
+    expect(stageDefault("cascading", params).dr).toMatchObject({ value: 0.667, src: { kind: "terukur", via: "uji sisip", n: 6 } });
+  });
+
+  it("menit tinjauan: tinjauan di bawah 30 detik tidak dihitung", () => {
+    expect(reviewMinutesFrom([7, 3, 14, 13])).toEqual({ minutes: 0, n: 0, ignored: 4 });
+    const r = reviewMinutesFrom([7, 240, 360]);
+    expect(r.n).toBe(2);
+    expect(r.ignored).toBe(1);
+    expect(r.minutes).toBeCloseTo(5, 9);
+  });
+
+  it("anggaran disarankan = kombinasi termurah yang mencapai ≥ 95% dari P tertinggi di kisi", () => {
+    const st: Stage[] = [
+      { key: "custom_a", e: 0.47, dr: 0.54, cTok: 25000, cMin: 5 },
+      { key: "custom_b", e: 0.25, dr: 0.53, cTok: 4000, cMin: 5 },
+      { key: "custom_c", e: 0.2, dr: 1, cTok: 12000, cMin: 5 },
+      { key: "custom_d", e: 0.1, dr: 1, cTok: 12000, cMin: 5 },
+    ];
+    const s1 = suggestBudget(st, 0.85);
+    const s2 = suggestBudget(st, 0.85);
+    expect(s1).toEqual(s2); // deterministik
+    expect(s1.p).toBeGreaterThanOrEqual(0.95 * s1.pMax - 1e-12);
+    // Tidak ada anggaran yang lebih hemat menit (lalu token) di kisi yang juga mencapai 95%
+    const cheaper = bestPlacement(st, 0.85, 100000, Math.max(0, s1.min - 5));
+    expect(cheaper.p).toBeLessThan(0.95 * s1.pMax);
+    // Biaya penempatan pada anggaran yang disarankan tidak melebihi anggaran itu
+    const r = runModel(st, 0.85, s1.tok, s1.min, {});
+    expect(r.costRec.tok).toBeLessThanOrEqual(s1.tok);
+    expect(r.costRec.min).toBeLessThanOrEqual(s1.min);
+  });
+
+  it("rentang keyakinan P: memuat P titik, menyempit bila data bertambah, dan deterministik", () => {
+    const base = [
+      { key: "a", e: 0.2, dr: 0.5, cTok: 1, cMin: 1 },
+      { key: "b", e: 0.1, dr: 0.5, cTok: 1, cMin: 1 },
+    ];
+    const few = base.map((s) => ({ ...s, k: Math.round(s.e * 10), n: 10 }));
+    const many = base.map((s) => ({ ...s, k: Math.round(s.e * 100), n: 100 }));
+    const p = predictP(base, {}, 0.85);
+    const a = predictInterval(few, {}, 0.85);
+    const b = predictInterval(many, {}, 0.85);
+    expect(a.lo).toBeLessThan(p);
+    expect(a.hi).toBeGreaterThan(p);
+    expect(b.hi - b.lo).toBeLessThan(a.hi - a.lo);
+    expect(predictInterval(few, {}, 0.85)).toEqual(a);
+    // Tanpa data terukur (asumsi) atau 0 keliru, eᵢ tidak diacak: rentangnya nol
+    expect(predictInterval(base, {}, 0.85)).toEqual({ lo: p, hi: p });
+    expect(predictInterval(base.map((s) => ({ ...s, e: 0, k: 0, n: 16 })), {}, 0.85)).toEqual({ lo: 1, hi: 1 });
   });
 });

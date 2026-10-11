@@ -27,5 +27,17 @@ export const ASSUMED_WHY = {
   dh: "perkiraan awal: peninjau teliti menangkap sekitar 85 dari 100 kekeliruan",
 } as const;
 
-/** Jumlah data minimum agar proporsi terukur (e, d×r) dipakai menggantikan asumsi. */
-export const MIN_N = 5;
+/** Jumlah data minimum agar proporsi terukur (e, d×r uji sisip) dipakai menggantikan asumsi; rentang Wilson ikut ditampilkan. */
+export const MIN_N_USE = 3;
+
+/** Jumlah node run minimum di MASING-MASING kondisi (dengan / tanpa validator) agar d×r nyata dipakai. */
+export const MIN_N_DR_OBSERVED = 5;
+
+/** Jumlah kekeliruan minimum TANPA validator agar d×r nyata dipakai: dengan satu kejadian, rasionya ditentukan kebetulan. */
+export const MIN_ERRORS_DR_OBSERVED = 2;
+
+/** Tinjauan yang lebih singkat dari ini dianggap tidak dibaca sungguhan dan tidak dipakai untuk menit tinjauan. */
+export const MIN_REVIEW_SEC = 30;
+
+/** e = 0 terukur dengan n di bawah ini diberi peringatan "data sedikit" (0 dari n belum membuktikan tidak pernah keliru). */
+export const FEW_DATA_N = 10;

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Loading, Select, Table, Toggle, cx } from "@/components/ui";
 import { api, fmt, useApi } from "@/lib/client/api";
 import { NODE_KEYS, NODE_META, nodeLabel, type NodeKey } from "@/lib/nodes/meta";
-import { ASSUMED, MIN_N } from "@/lib/experiment/assumptions";
+import { ASSUMED, MIN_N_USE } from "@/lib/experiment/assumptions";
 import { optimize, optimizeDP } from "@/lib/experiment/optimize";
 import { placementCost, predictP, type Stage } from "@/lib/experiment/propagation";
 import { QualityCurve } from "./quality-curve";
@@ -60,15 +60,16 @@ export function OptimizeTab({ params, paramsError }: { params: ParamsResponse | 
     const a = assumedEdit(k);
     const e = fin(s?.e.p);
     return {
-      e: s && s.e.n >= MIN_N && Number.isFinite(e) ? e.toFixed(3) : a.e,
-      dr: s && s.d.n >= MIN_N ? s.dr.toFixed(3) : a.dr,
+      e: s && s.e.n >= MIN_N_USE && Number.isFinite(e) ? e.toFixed(3) : a.e,
+      // d×r: nyata (run sungguhan) → uji sisip → asumsi (sama dengan laporan di canvas)
+      dr: s?.drObserved ? s.drObserved.dr.toFixed(3) : s && s.d.n >= MIN_N_USE ? s.dr.toFixed(3) : a.dr,
       cTok: s && s.cTokN > 0 ? String(s.cTok) : a.cTok,
       cMin: s && s.cMinN > 0 ? String(s.cMin) : a.cMin,
     };
   };
   const measured = (k: string) => {
     const s = params?.stages.find((x) => x.key === k);
-    return { e: !!s && s.e.n >= MIN_N, dr: !!s && s.d.n >= MIN_N, cTok: !!s && s.cTokN > 0, cMin: !!s && s.cMinN > 0 };
+    return { e: !!s && s.e.n >= MIN_N_USE, dr: !!s && (!!s.drObserved || s.d.n >= MIN_N_USE), cTok: !!s && s.cTokN > 0, cMin: !!s && s.cMinN > 0 };
   };
   const value = (k: string): Edit => ({ ...defaults(k), ...edits[k] });
 

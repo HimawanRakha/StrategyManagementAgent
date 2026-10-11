@@ -5,8 +5,8 @@ import { attachedChecks, canvasNodeOf, engineParents, labelOf, processKeys } fro
 import { NODE_META, type NodeKey } from "@/lib/nodes/meta";
 import { isCustomKey } from "@/lib/nodes/custom";
 import { optimize, optimizeDP } from "@/lib/experiment/optimize";
-import { effectiveError, placementCost, predictP, type Choice, type Stage } from "@/lib/experiment/propagation";
-import { ASSUMED, ASSUMED_WHY, MIN_N } from "@/lib/experiment/assumptions";
+import { effectiveError, placementCost, predictInterval, predictP, type Choice, type Stage } from "@/lib/experiment/propagation";
+import { ASSUMED, ASSUMED_WHY, FEW_DATA_N, MIN_N_USE } from "@/lib/experiment/assumptions";
 
 // ---------------------------------------------------------------------------------------------
 // Data
@@ -47,19 +47,25 @@ export type ReportProjectData = {
 export type ParamsApi = {
   stages: {
     key: string;
-    e: { p: number | null; n: number };
+    e: { p: number | null; n: number; lo?: number; hi?: number; k?: number };
     d?: { p?: number | null; n: number };
     dr: number;
+    /** d×r nyata (dengan vs tanpa validator di run sungguhan); null bila datanya belum cukup. */
+    drObserved?: { dr: number; nOn: number; nOff: number } | null;
     cTok: number;
     cTokN: number;
     cMin: number;
     cMinN: number;
+    /** Tinjauan yang tidak dihitung karena terlalu singkat (< MIN_REVIEW_SEC detik). */
+    cMinIgnored?: number;
   }[];
   dh: number;
+  /** Profil parameter: model AI yang datanya dipakai. Null/0 run = belum ada data untuk model ini. */
+  profile?: { model: string; runs: number; measuredAt: string | null } | null;
 };
 
-/** Anggaran bawaan (tetap; bisa diubah pengguna dan disimpan per proyek). */
-export const DEFAULTS = { bTok: 3000, bMin: 10 };
+/** Kisi anggaran untuk saran anggaran otomatis ("titik siku"). */
+export const BUDGET_GRID = { tok: [0, 10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000], min: [0, 5, 10, 15, 20, 25, 30] };
 export const CURVE_MINUTES = [0, 5, 10, 15, 20, 30];
 
 const finite = (x: number | null | undefined): x is number => typeof x === "number" && Number.isFinite(x);
@@ -420,46 +426,78 @@ export const FIELD_INFO: Record<Field, { sym: string; name: string; meaning: str
 };
 
 export type Source =
-  | { kind: "terukur"; n: number }
-  | { kind: "asumsi"; why: string; fewN?: number }
+  | {
+      kind: "terukur";
+      n: number;
+      /** Rentang Wilson 95% (untuk peluang). */
+      lo?: number;
+      hi?: number;
+      /** Asal d×r: dari run sungguhan atau dari uji sisip. */
+      via?: "nyata" | "uji sisip";
+      /** e = 0 dengan data sedikit: belum membuktikan tidak pernah keliru. */
+      few?: boolean;
+    }
+  | {
+      kind: "asumsi";
+      why: string;
+      fewN?: number;
+      /** Mengapa belum terukur, dalam kalimat pendek (mis. "baru 2 data, perlu ≥ 3"). */
+      reason?: string;
+    }
   | { kind: "pengaturan" }
   | { kind: "tidak ada" };
-export type StageParam = { value: number; src: Source };
+export type StageParam = { value: number; src: Source; /** k keliru dari n (untuk rentang keyakinan P) */ kn?: { k: number; n: number } };
 export type StageDefault = Record<Field, StageParam>;
 
 /**
- * Nilai awal angka model untuk satu analisis: (1) terukur dari eksperimen bila datanya cukup, selain itu
- * (2) asumsi tetap yang terdokumentasi. TIDAK memakai angka run ini dan TIDAK bergantung pada penempatan di canvas,
+ * Nilai awal angka model untuk satu analisis: (1) terukur dari eksperimen bila datanya cukup (n ≥ MIN_N_USE), selain itu
+ * (2) asumsi tetap yang terdokumentasi. d×r memakai urutan: nyata (run sungguhan) → uji sisip → asumsi. TIDAK memakai angka run ini dan TIDAK bergantung pada penempatan di canvas,
  * sehingga rekomendasi tidak berubah hanya karena validator/tinjauan dipasang atau dilepas.
  */
 export function stageDefault(key: string, params: ParamsApi | null): StageDefault {
   const m = params?.stages.find((s) => s.key === key);
   const isCode = NODE_META[key as NodeKey]?.kind === "code";
   const hasVal = validatorAvailable(key);
-  const assumed = (value: number, why: string, fewN?: number): StageParam => ({ value, src: { kind: "asumsi", why, ...(fewN ? { fewN } : {}) } });
+  const assumed = (value: number, why: string, fewN?: number, reason?: string): StageParam => ({
+    value,
+    src: { kind: "asumsi", why, ...(fewN ? { fewN } : {}), ...(reason ? { reason } : {}) },
+  });
+  const notYet = (n: number | undefined, need: number, none: string) => (n ? `baru ${n} data, perlu ≥ ${need}` : none);
 
   const e: StageParam =
-    m && m.e.n >= MIN_N && finite(m.e.p)
-      ? { value: m.e.p, src: { kind: "terukur", n: m.e.n } }
-      : assumed(isCode ? ASSUMED.eCode : ASSUMED.e, isCode ? ASSUMED_WHY.eCode : ASSUMED_WHY.e, m?.e.n || undefined);
+    m && m.e.n >= MIN_N_USE && finite(m.e.p)
+      ? {
+          value: m.e.p,
+          src: { kind: "terukur", n: m.e.n, lo: m.e.lo, hi: m.e.hi, ...(m.e.p === 0 && m.e.n < FEW_DATA_N ? { few: true } : {}) },
+          kn: { k: m.e.k ?? Math.round(m.e.p * m.e.n), n: m.e.n },
+        }
+      : assumed(isCode ? ASSUMED.eCode : ASSUMED.e, isCode ? ASSUMED_WHY.eCode : ASSUMED_WHY.e, m?.e.n || undefined, notYet(m?.e.n, MIN_N_USE, "belum ada run yang dinilai"));
 
   const dN = m?.d?.n ?? 0;
+  const obs = m?.drObserved;
   const dr: StageParam = !hasVal
     ? { value: 0, src: { kind: "tidak ada" } }
-    : m && dN >= MIN_N && finite(m.dr)
-      ? { value: m.dr, src: { kind: "terukur", n: dN } }
-      : assumed(ASSUMED.dr, ASSUMED_WHY.dr, dN || undefined);
+    : obs && finite(obs.dr)
+      ? { value: obs.dr, src: { kind: "terukur", n: obs.nOn + obs.nOff, via: "nyata" } }
+      : m && dN >= MIN_N_USE && finite(m.dr)
+        ? { value: m.dr, src: { kind: "terukur", n: dN, via: "uji sisip" } }
+        : assumed(ASSUMED.dr, ASSUMED_WHY.dr, dN || undefined, dN ? `uji sisip baru ${dN}, perlu ≥ ${MIN_N_USE}` : "belum diuji sisip");
 
   const cTok: StageParam = !hasVal
     ? { value: 0, src: { kind: "tidak ada" } }
     : m && m.cTokN > 0 && finite(m.cTok) && m.cTok > 0
       ? { value: m.cTok, src: { kind: "terukur", n: m.cTokN } }
-      : assumed(ASSUMED.cTok, ASSUMED_WHY.cTok);
+      : assumed(ASSUMED.cTok, ASSUMED_WHY.cTok, undefined, "validator belum pernah dipasang");
 
   const cMin: StageParam =
     m && m.cMinN > 0 && finite(m.cMin) && m.cMin > 0
       ? { value: Number(m.cMin.toFixed(1)), src: { kind: "terukur", n: m.cMinN } }
-      : assumed(ASSUMED.cMin, ASSUMED_WHY.cMin);
+      : assumed(
+          ASSUMED.cMin,
+          ASSUMED_WHY.cMin,
+          undefined,
+          m?.cMinIgnored ? `${m.cMinIgnored} tinjauan < 30 dtk tidak dihitung` : "belum ada tinjauan manusia",
+        );
 
   return { e, dr, cTok, cMin };
 }
@@ -500,11 +538,16 @@ export function cellOf(def: StageDefault, edits: ParamEdits, k: string, f: Field
 
 export const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
+/** Tahap model untuk rentang keyakinan: k keliru dari n ikut bila e terukur dan tidak diubah pengguna. */
+export type StageKN = Stage & { k?: number; n?: number };
+
 /** Tahap model dari nilai awal + edit pengguna. */
-export function buildStages(keys: string[], defaults: Record<string, StageDefault>, edits: ParamEdits): Stage[] {
+export function buildStages(keys: string[], defaults: Record<string, StageDefault>, edits: ParamEdits): StageKN[] {
   return keys.map((k) => {
     const hasVal = validatorAvailable(k);
+    const kn = edits[k]?.e === undefined ? defaults[k].e.kn : undefined;
     return {
+      ...(kn ? { k: kn.k, n: kn.n } : {}),
       key: k,
       e: clamp01(cellOf(defaults[k], edits, k, "e").value),
       dr: hasVal ? clamp01(cellOf(defaults[k], edits, k, "dr").value) : 0,
@@ -517,7 +560,10 @@ export function buildStages(keys: string[], defaults: Record<string, StageDefaul
 // ---------------------------------------------------------------------------------------------
 // Penyimpanan pengaturan per proyek (localStorage; gagal diam-diam bila tidak tersedia)
 
-export type SavedSettings = { v: 1; edits: ParamEdits; dh: string | null; bTok: string; bMin: string };
+/** bTok/bMin null = pakai anggaran yang disarankan (titik siku). */
+export type SavedSettings = { v: 1; edits: ParamEdits; dh: string | null; bTok: string | null; bMin: string | null };
+/** Anggaran bawaan lama yang tidak pernah diubah pengguna — dianggap "pakai saran". */
+const OLD_DEFAULTS = { bTok: "3000", bMin: "10" };
 export const settingsKey = (projectId: string) => `strategi-agen.laporan.${projectId}`;
 
 export function loadSettings(projectId: string): SavedSettings | null {
@@ -538,8 +584,8 @@ export function loadSettings(projectId: string): SavedSettings | null {
       v: 1,
       edits,
       dh: typeof x.dh === "string" ? x.dh : null,
-      bTok: typeof x.bTok === "string" ? x.bTok : String(DEFAULTS.bTok),
-      bMin: typeof x.bMin === "string" ? x.bMin : String(DEFAULTS.bMin),
+      bTok: typeof x.bTok === "string" && !(x.bTok === OLD_DEFAULTS.bTok && x.bMin === OLD_DEFAULTS.bMin) ? x.bTok : null,
+      bMin: typeof x.bMin === "string" && !(x.bTok === OLD_DEFAULTS.bTok && x.bMin === OLD_DEFAULTS.bMin) ? x.bMin : null,
     };
   } catch {
     return null;
@@ -549,7 +595,7 @@ export function loadSettings(projectId: string): SavedSettings | null {
 export function saveSettings(projectId: string, s: SavedSettings) {
   try {
     if (typeof window === "undefined") return;
-    const empty = !Object.keys(s.edits).length && s.dh === null && s.bTok === String(DEFAULTS.bTok) && s.bMin === String(DEFAULTS.bMin);
+    const empty = !Object.keys(s.edits).length && s.dh === null && s.bTok === null && s.bMin === null;
     if (empty) window.localStorage.removeItem(settingsKey(projectId));
     else window.localStorage.setItem(settingsKey(projectId), JSON.stringify(s));
   } catch {
@@ -605,7 +651,7 @@ export function changeWords(label: string, cur: Choice | undefined, rec: Choice 
 }
 
 export type ModelResult = {
-  stages: Stage[];
+  stages: StageKN[];
   dh: number;
   current: Record<string, Choice>;
   rec: Record<string, Choice>;
@@ -613,6 +659,9 @@ export type ModelResult = {
   pNone: number;
   pCur: number;
   pRec: number;
+  /** Rentang keyakinan 95% (Monte Carlo atas ketidakpastian eᵢ terukur). */
+  ciCur: { lo: number; hi: number };
+  ciRec: { lo: number; hi: number };
   costCur: { tok: number; min: number };
   costRec: { tok: number; min: number };
   overBudget: boolean;
@@ -622,7 +671,7 @@ export type ModelResult = {
 };
 
 /** Hitung model penempatan lengkap. Deterministik untuk masukan yang sama. */
-export function runModel(stages: Stage[], dh: number, bTok: number, bMin: number, current: Record<string, Choice>): ModelResult {
+export function runModel(stages: StageKN[], dh: number, bTok: number, bMin: number, current: Record<string, Choice>): ModelResult {
   const r = bestPlacement(stages, dh, bTok, bMin);
   const costCur = placementCost(stages, current);
   const pCur = predictP(stages, current, dh);
@@ -640,12 +689,33 @@ export function runModel(stages: Stage[], dh: number, bTok: number, bMin: number
     pNone: predictP(stages, {}, dh),
     pCur,
     pRec,
+    ciCur: predictInterval(stages, current, dh),
+    ciRec: predictInterval(stages, rec, dh),
     costCur,
     costRec: placementCost(stages, rec),
     overBudget: !curFits,
     keptCurrent,
     curve: CURVE_MINUTES.map((m) => ({ minutes: m, p: bestPlacement(stages, dh, bTok, m).p })),
   };
+}
+
+/**
+ * Anggaran yang disarankan ("titik siku"): coba penempatan terbaik untuk setiap anggaran di BUDGET_GRID, lalu pilih
+ * kombinasi termurah (menit dulu, lalu token) yang P-nya ≥ 95% dari P tertinggi di kisi. Biaya yang dilaporkan adalah
+ * biaya penempatan sebenarnya (bisa di bawah anggaran). Deterministik.
+ */
+export function suggestBudget(stages: Stage[], dh: number) {
+  const pts: { bTok: number; bMin: number; p: number; tok: number; min: number }[] = [];
+  for (const t of BUDGET_GRID.tok)
+    for (const m of BUDGET_GRID.min) {
+      const r = bestPlacement(stages, dh, t, m);
+      const c = placementCost(stages, r.place);
+      pts.push({ bTok: t, bMin: m, p: r.p, tok: c.tok, min: c.min });
+    }
+  const pMax = Math.max(...pts.map((x) => x.p));
+  const best = pts.filter((x) => x.p >= 0.95 * pMax - 1e-12).sort((a, b) => a.min - b.min || a.tok - b.tok || b.p - a.p)[0];
+  // Anggaran = biaya sebenarnya (dibulatkan ke atas ke 1.000 token), agar saran tidak menyisakan anggaran kosong.
+  return { tok: Math.ceil(best.tok / 1000) * 1000, min: Math.ceil(best.min), p: best.p, pMax };
 }
 
 /** Peluang galat sisa satu analisis dengan pilihan tertentu. */

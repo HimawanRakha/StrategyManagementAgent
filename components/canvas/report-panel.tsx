@@ -13,7 +13,6 @@ import { labelOf } from "@/lib/engine/canvas";
 import { NODE_KEYS } from "@/lib/nodes/meta";
 import type { Choice, Stage } from "@/lib/experiment/propagation";
 import {
-  DEFAULTS,
   FIELDS,
   buildConclusion,
   buildStages,
@@ -29,6 +28,7 @@ import {
   saveSettings,
   showNum,
   stageDefault,
+  suggestBudget,
   summarize,
   validatorAvailable,
   type ModelResult,
@@ -77,12 +77,14 @@ export function ReportPanel(props: {
   const findings = useMemo(() => collectFindings(graph, data), [graph, data]);
 
   // ---------- Angka model (disimpan per proyek) ----------
-  const params = useApi<ParamsApi>("/api/experiments/parameters");
+  // Profil parameter sesuai model AI canvas (LLM_MODEL di server); profil kosong → semua asumsi.
+  const params = useApi<ParamsApi>("/api/experiments/parameters?model=default");
   const [saved] = useState(() => loadSettings(projectId));
   const [edits, setEdits] = useState<ParamEdits>(saved?.edits ?? {});
   const [dhStr, setDhStr] = useState<string | null>(saved?.dh ?? null);
-  const [bTokStr, setBTokStr] = useState(saved?.bTok ?? String(DEFAULTS.bTok));
-  const [bMinStr, setBMinStr] = useState(saved?.bMin ?? String(DEFAULTS.bMin));
+  // null = pakai anggaran yang disarankan (dihitung dari angka model).
+  const [bTokStr, setBTokStr] = useState<string | null>(saved?.bTok ?? null);
+  const [bMinStr, setBMinStr] = useState<string | null>(saved?.bMin ?? null);
   useEffect(() => {
     saveSettings(projectId, { v: 1, edits, dh: dhStr, bTok: bTokStr, bMin: bMinStr });
   }, [projectId, edits, dhStr, bTokStr, bMinStr]);
@@ -91,17 +93,20 @@ export function ReportPanel(props: {
   const defaults = useMemo<Record<string, StageDefault>>(() => Object.fromEntries(keys.map((k) => [k, stageDefault(k, params.data)])), [keys, params.data]);
   const dhDef = dhDefault(params.data);
   const dhRaw = parseNumber(dhStr ?? showNum(dhDef.value, 2));
-  const bTok = parseNumber(bTokStr);
-  const bMin = parseNumber(bMinStr);
-  const bad = {
-    bTok: !Number.isFinite(bTok) || bTok < 0,
-    bMin: !Number.isFinite(bMin) || bMin < 0,
-    dh: !Number.isFinite(dhRaw) || dhRaw < 0 || dhRaw > 1,
-  };
-  const dh = bad.dh ? dhDef.value : dhRaw;
+  const dhBad = !Number.isFinite(dhRaw) || dhRaw < 0 || dhRaw > 1;
+  const dh = dhBad ? dhDef.value : dhRaw;
   const ready = !params.loading; // tunggu angka terukur agar rekomendasi tidak berubah di tengah jalan
 
   const stages = useMemo<Stage[]>(() => buildStages(keys, defaults, edits), [keys, defaults, edits]);
+  // Anggaran disarankan ("titik siku"); dihitung ulang hanya bila angka model berubah.
+  const suggestion = useMemo(() => (ready && stages.length ? suggestBudget(stages, dh) : null), [stages, dh, ready]);
+  const bTok = bTokStr === null ? (suggestion?.tok ?? 0) : parseNumber(bTokStr);
+  const bMin = bMinStr === null ? (suggestion?.min ?? 0) : parseNumber(bMinStr);
+  const bad = {
+    bTok: !Number.isFinite(bTok) || bTok < 0,
+    bMin: !Number.isFinite(bMin) || bMin < 0,
+    dh: dhBad,
+  };
   const current = useMemo(() => currentPlacement(graph, keys), [graph, keys]);
   // Hitung ulang hanya bila angka/penempatan/anggaran benar-benar berubah (bukan saat node digeser).
   const sig = JSON.stringify([stages, current, dh, bad.bTok ? 0 : bTok, bad.bMin ? 0 : bMin]);
@@ -166,6 +171,8 @@ export function ReportPanel(props: {
     setBTokStr,
     bMinStr,
     setBMinStr,
+    suggestion,
+    profile: params.data?.profile ?? null,
     bad,
     paramsLoading: params.loading,
     paramsError: params.error,

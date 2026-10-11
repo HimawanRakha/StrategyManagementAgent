@@ -9,7 +9,7 @@ import { fmt } from "@/lib/client/api";
 import type { WorkflowGraph } from "@/lib/db/schema";
 import { labelOf } from "@/lib/engine/canvas";
 import { NODE_META, type NodeKey } from "@/lib/nodes/meta";
-import { ASSUMED, MIN_N } from "@/lib/experiment/assumptions";
+import { ASSUMED, FEW_DATA_N, MIN_N_USE, MIN_REVIEW_SEC } from "@/lib/experiment/assumptions";
 import {
   CURVE_MINUTES,
   FIELDS,
@@ -44,10 +44,15 @@ export type ModelControls = {
   setDhStr: (v: string | null) => void;
   dhDefault: StageParam;
   dh: number;
-  bTokStr: string;
-  setBTokStr: (v: string) => void;
-  bMinStr: string;
-  setBMinStr: (v: string) => void;
+  /** null = pakai anggaran yang disarankan. */
+  bTokStr: string | null;
+  setBTokStr: (v: string | null) => void;
+  bMinStr: string | null;
+  setBMinStr: (v: string | null) => void;
+  /** Anggaran disarankan ("titik siku") dari angka model. */
+  suggestion: { tok: number; min: number; p: number; pMax: number } | null;
+  /** Profil parameter (model AI yang datanya dipakai). */
+  profile: { model: string; runs: number; measuredAt: string | null } | null;
   bad: { bTok: boolean; bMin: boolean; dh: boolean };
   paramsLoading: boolean;
   paramsError: string | null;
@@ -225,6 +230,10 @@ export function RecommendationSection({
   const [applied, setApplied] = useState<string | null>(null);
   if (!c.keys.length) return <Empty>Tambahkan analisis ke canvas dulu, lalu buka bagian ini lagi.</Empty>;
   const budgetOk = !c.bad.bTok && !c.bad.bMin;
+  const sug = c.suggestion;
+  const bTokVal = c.bTokStr === null ? (sug?.tok ?? 0) : parseNumber(c.bTokStr);
+  const bMinVal = c.bMinStr === null ? (sug?.min ?? 0) : parseNumber(c.bMinStr);
+  const usingSuggestion = c.bTokStr === null && c.bMinStr === null;
 
   return (
     <div className="space-y-5 text-sm">
@@ -247,8 +256,8 @@ export function RecommendationSection({
               Anggaran token pemeriksaan (B<sub>tok</sub>)
             </>
           }
-          hint="total token tambahan untuk validator"
-          value={c.bTokStr}
+          hint={c.bTokStr === null ? "disarankan otomatis (titik siku)" : "diubah Anda"}
+          value={c.bTokStr ?? (sug ? String(sug.tok) : "")}
           bad={c.bad.bTok}
           onChange={c.setBTokStr}
           suffix="token"
@@ -259,8 +268,8 @@ export function RecommendationSection({
               Anggaran waktu tinjauan (B<sub>min</sub>)
             </>
           }
-          hint="total menit pengurus untuk meninjau"
-          value={c.bMinStr}
+          hint={c.bMinStr === null ? "disarankan otomatis (titik siku)" : "diubah Anda"}
+          value={c.bMinStr ?? (sug ? String(sug.min) : "")}
           bad={c.bad.bMin}
           onChange={c.setBMinStr}
           suffix="menit"
@@ -278,6 +287,27 @@ export function RecommendationSection({
         />
       </div>
 
+      {sug && (
+        <div className="-mt-2 flex flex-wrap items-center gap-2 text-[12px] text-muted">
+          <span>
+            Anggaran disarankan: <b className="text-text">{fmt.num(sug.tok / 1000, 0)} rb token + {fmt.num(sug.min, 0)} menit</b> (P {pct1(sug.p)}) — anggaran
+            termurah yang sudah mencapai ≥ 95% dari peluang tertinggi ({pct1(sug.pMax)}) pada kisi 0–100 rb token × 0–30 menit.
+          </span>
+          {!usingSuggestion && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                c.setBTokStr(null);
+                c.setBMinStr(null);
+              }}
+            >
+              Pakai saran
+            </Button>
+          )}
+        </div>
+      )}
+
       {!model ? (
         <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
           {c.paramsLoading ? "Memuat angka terukur dari eksperimen… rekomendasi muncul setelah semua angka siap." : "Belum ada analisis untuk dihitung."}
@@ -288,6 +318,7 @@ export function RecommendationSection({
             <ResultBox
               title="Penempatan sekarang"
               p={model.pCur}
+              ci={model.ciCur}
               tok={model.costCur.tok}
               min={model.costCur.min}
               note={model.overBudget ? <span className="text-warn">Melebihi anggaran yang Anda tetapkan.</span> : undefined}
@@ -296,6 +327,7 @@ export function RecommendationSection({
               title="Rekomendasi"
               highlight
               p={model.pRec}
+              ci={model.ciRec}
               tok={model.costRec.tok}
               min={model.costRec.min}
               note={<span className={model.pRec - model.pCur >= 0 ? "text-ok" : "text-warn"}>{pp(model.pRec - model.pCur)} dibanding sekarang</span>}
@@ -378,7 +410,7 @@ export function RecommendationSection({
 
       <ParamTable graph={graph} data={data} c={c} />
 
-      {model && <QualityCurveMini curve={model.curve} current={model.pCur} bTok={budgetOk ? parseNumber(c.bTokStr) : 0} bMin={budgetOk ? parseNumber(c.bMinStr) : null} />}
+      {model && <QualityCurveMini curve={model.curve} current={model.pCur} bTok={budgetOk ? bTokVal : 0} bMin={budgetOk ? bMinVal : null} />}
     </div>
   );
 }
@@ -449,6 +481,21 @@ function ParamTable({ graph, data, c }: { graph: WorkflowGraph; data: ReportProj
         </div>
       </dl>
 
+      <p className="mb-2 text-[12px] text-muted">
+        {c.profile && c.profile.runs > 0 ? (
+          <>
+            Profil: <b className="text-text">{c.profile.model}</b> · {c.profile.runs} run{c.profile.measuredAt ? ` · diukur ${c.profile.measuredAt}` : ""}. Angka terukur hanya
+            diambil dari run model ini.
+          </>
+        ) : c.profile ? (
+          <span className="text-warn">
+            Profil: {c.profile.model} · belum ada run untuk model ini — semua angka memakai asumsi, jadi rekomendasi hanya <b>perkiraan kasar</b>.
+          </span>
+        ) : null}
+      </p>
+
+      {!c.paramsLoading && <MeasuredSummary c={c} />}
+
       {c.paramsError && (
         <p className="mb-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
           Angka terukur dari eksperimen belum bisa dimuat ({c.paramsError}); semua angka memakai asumsi.
@@ -484,6 +531,7 @@ function ParamTable({ graph, data, c }: { graph: WorkflowGraph; data: ReportProj
                       );
                     const cell = cellOf(d, c.edits, k, f);
                     const obs = f === "cTok" ? o.cTok : f === "cMin" ? o.cMin : null;
+                    const isAssumed = !c.paramsLoading && !cell.edited && d[f].src.kind === "asumsi";
                     return (
                       <td key={f} className="px-2 py-2 align-top">
                         <input
@@ -493,10 +541,10 @@ function ParamTable({ graph, data, c }: { graph: WorkflowGraph; data: ReportProj
                           onChange={(e) => setEdit(k, f, e.target.value)}
                           className={cx(
                             "h-7 w-20 rounded border bg-surface px-1.5 text-right text-sm tabular-nums outline-none focus:border-primary focus:ring-2 focus:ring-primary/15",
-                            cell.bad ? "border-danger" : "border-border",
+                            cell.bad ? "border-danger" : isAssumed ? "border-warn/60 bg-warn-soft/40" : "border-border",
                           )}
                         />
-                        <SourceTag src={d[f].src} edited={cell.edited} bad={cell.bad} />
+                        <SourceTag src={d[f].src} edited={cell.edited} bad={cell.bad} loading={c.paramsLoading} />
                         {obs !== null && (
                           <div className="mt-0.5 text-[10px] text-muted">
                             teramati di run: {f === "cTok" ? fmt.int(obs) : showNum(obs, 1)}{" "}
@@ -515,7 +563,9 @@ function ParamTable({ graph, data, c }: { graph: WorkflowGraph; data: ReportProj
         </table>
       </div>
       <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-        Asal angka: <b className="text-ok">terukur</b> = dihitung dari eksperimen (n = jumlah data; peluang baru dipakai bila n ≥ {MIN_N});{" "}
+        Asal angka: <b className="text-ok">terukur</b> = dihitung dari eksperimen (n = jumlah data; peluang dipakai bila n ≥ {MIN_N_USE}, dengan
+        rentang keyakinan 95%; dʳ diambil dari run sungguhan bila cukup data, selain itu dari uji sisip; tinjauan di bawah {MIN_REVIEW_SEC} detik
+        tidak dihitung sebagai menit tinjauan; e = 0 dari kurang dari {FEW_DATA_N} data diberi tanda <i>data sedikit</i>);{" "}
         <b className="text-warn">asumsi</b> = angka awal tetap (e = {showNum(ASSUMED.e, 2)}, dʳ = {showNum(ASSUMED.dr, 2)}, c_tok = {fmt.int(ASSUMED.cTok)}{" "}
         token, c_min = {ASSUMED.cMin} menit, analisis yang dihitung program e = {showNum(ASSUMED.eCode, 2)}); <b className="text-primary">diubah Anda</b> =
         angka yang Anda ketik (disimpan untuk proyek ini). <b>Teramati di run</b> hanya informasi dari run terakhir — dipakai model hanya bila Anda menekan
@@ -525,6 +575,33 @@ function ParamTable({ graph, data, c }: { graph: WorkflowGraph; data: ReportProj
         Ukur angka sungguhan di menu Eksperimen →
       </Link>
     </div>
+  );
+}
+
+/** "N dari M angka terisi otomatis dari eksperimen; sisanya asumsi" (angka yang diketik pengguna dihitung terpisah). */
+function MeasuredSummary({ c }: { c: ModelControls }) {
+  let measured = 0;
+  let assumed = 0;
+  let edited = 0;
+  for (const k of c.keys)
+    for (const f of FIELDS) {
+      if (!validatorAvailable(k) && (f === "dr" || f === "cTok")) continue;
+      if (c.edits[k]?.[f] !== undefined) edited++;
+      else if (c.defaults[k]?.[f].src.kind === "terukur") measured++;
+      else if (c.defaults[k]?.[f].src.kind === "asumsi") assumed++;
+    }
+  const total = measured + assumed + edited;
+  return (
+    <p className="mb-2 text-[12px]">
+      <b className="text-ok">{measured}</b> dari {total} angka terisi otomatis dari hasil eksperimen;{" "}
+      <b className="text-warn">{assumed}</b> masih <b>asumsi</b> (kolom kuning — alasannya ditulis di bawah angkanya)
+      {edited ? (
+        <>
+          ; <b className="text-primary">{edited}</b> diubah Anda
+        </>
+      ) : null}
+      .
+    </p>
   );
 }
 
@@ -557,14 +634,27 @@ function Sym({ f }: { f: Field }) {
   );
 }
 
-function SourceTag({ src, edited, bad }: { src: Source; edited: boolean; bad: boolean }) {
+function SourceTag({ src, edited, bad, loading }: { src: Source; edited: boolean; bad: boolean; loading?: boolean }) {
   if (bad) return <div className="mt-0.5 text-[10px] text-danger">isi angka yang valid</div>;
   if (edited) return <div className="mt-0.5 text-[10px] text-primary">diubah Anda</div>;
-  if (src.kind === "terukur") return <div className="mt-0.5 text-[10px] text-ok">terukur (n={src.n})</div>;
+  if (loading) return <div className="mt-0.5 text-[10px] text-muted">memuat…</div>;
+  if (src.kind === "terukur")
+    return (
+      <div className="mt-0.5 text-[10px] text-ok">
+        terukur{src.via ? ` · ${src.via}` : ""} (n={src.n})
+        {src.lo !== undefined && src.hi !== undefined && (
+          <span className="text-muted">
+            {" "}
+            · 95%: {showNum(src.lo, 2)}–{showNum(src.hi, 2)}
+          </span>
+        )}
+        {src.few && <div className="text-warn">data sedikit</div>}
+      </div>
+    );
   if (src.kind === "asumsi")
     return (
-      <div className="mt-0.5 text-[10px] text-warn" title={src.why}>
-        asumsi{src.fewN ? ` (baru n=${src.fewN})` : ""}
+      <div className="mt-0.5 max-w-[11rem] text-[10px] leading-tight text-warn" title={src.why}>
+        <b>asumsi</b> — belum terukur{src.reason ? `: ${src.reason}` : ""}
       </div>
     );
   return null;
@@ -591,7 +681,23 @@ function NumField({ label, hint, value, bad, onChange, suffix }: { label: ReactN
   );
 }
 
-function ResultBox({ title, p, tok, min, note, highlight }: { title: string; p: number; tok: number; min: number; note?: ReactNode; highlight?: boolean }) {
+function ResultBox({
+  title,
+  p,
+  ci,
+  tok,
+  min,
+  note,
+  highlight,
+}: {
+  title: string;
+  p: number;
+  ci?: { lo: number; hi: number };
+  tok: number;
+  min: number;
+  note?: ReactNode;
+  highlight?: boolean;
+}) {
   return (
     <div className={cx("rounded-md border px-3 py-2.5", highlight ? "border-primary/40 bg-primary-soft" : "border-border bg-surface")}>
       <div className="text-[11px] font-medium text-muted">{title}</div>
@@ -599,6 +705,11 @@ function ResultBox({ title, p, tok, min, note, highlight }: { title: string; p: 
         <span className="text-2xl font-semibold tabular-nums">{pct1(p)}</span>
         <span className="text-[11px] text-muted">peluang seluruh hasil bebas galat</span>
       </div>
+      {ci && (
+        <div className="text-[11px] tabular-nums text-muted" title="Rentang dari ketidakpastian angka keliru (eᵢ) yang terukur, disimulasikan 5.000 kali">
+          95% yakin antara {fmt.pct(ci.lo, 0)}–{fmt.pct(ci.hi, 0)}
+        </div>
+      )}
       <div className="mt-1 text-xs tabular-nums text-muted">
         biaya {fmt.int(tok)} token · {fmt.num(min, 1)} menit
       </div>
