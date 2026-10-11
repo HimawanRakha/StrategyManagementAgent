@@ -172,7 +172,7 @@ const swapQuote: Injector = {
       itemId,
       location: pathText(path),
       description: `Kutipan di ${pathText(path)} (butir ${itemId}, potongan ${chunkId}) diganti ${from ? `kalimat dari ${from}` : "kalimat karangan"}: "${injectedQuote.slice(0, 80)}" (semula "${before.slice(0, 60)}")`,
-      matches: (f) => (!!f.itemId && ids.includes(f.itemId)) || norm(f.message).includes(norm(injectedQuote.slice(0, 40))),
+      matches: (f) => (!!f.itemId && idMatch(f.itemId, ids)) || norm(f.message).includes(norm(injectedQuote.slice(0, 40))),
       isRepaired: (after) =>
         !walk(after).some((v) => isEvidence(v.value) && v.value.chunkId === chunkId && norm(v.value.quote) === norm(injectedQuote) && !quoteFound(v.value, evidence)),
     };
@@ -181,6 +181,11 @@ const swapQuote: Injector = {
 
 // ---------------------------------------------------------------------------------------------
 // (b) Rujukan ke ID yang tidak ada
+
+/** ID butir pada kegagalan validator cocok dengan butir yang disuntik (juga bentuk berlabel, mis. "MISI A" untuk aspek "A"). */
+function idMatch(failureId: string, ids: string[]) {
+  return ids.includes(failureId) || ids.includes(failureId.trim().split(/s+/).pop() ?? "");
+}
 
 /** Nama field rujukan: refs, ref, factorRefs, strategyRef, objective_refs, … */
 const REF_KEY = /(^refs?$|Refs?$|_refs?$)/;
@@ -221,7 +226,7 @@ const breakRef: Injector = {
       itemId,
       location: pathText(s.path),
       description: `Rujukan di ${pathText(s.path)} (butir ${itemId}) diganti dari ${s.value} ke ${fake} yang tidak ada`,
-      matches: (f) => (!!f.itemId && (ids.includes(f.itemId) || f.itemId === fake)) || mentions(f.message, fake),
+      matches: (f) => (!!f.itemId && (idMatch(f.itemId, ids) || f.itemId === fake)) || mentions(f.message, fake),
       isRepaired: (after) => !containsString(after, fake),
     };
   },
@@ -275,7 +280,7 @@ const outOfRange: Injector = {
       itemId,
       location: pathText(s.path),
       description: `Nilai ${key} di ${pathText(s.path)} (butir ${itemId}) diubah dari ${s.value} ke ${bad} (skala yang dipakai paling tinggi ${max})`,
-      matches: (f) => (!!f.itemId && ids.includes(f.itemId)) || new RegExp(`(^|[^0-9.,])${bad}([^0-9]|$)`).test(f.message),
+      matches: (f) => (!!f.itemId && idMatch(f.itemId, ids)) || new RegExp(`(^|[^0-9.,])${bad}([^0-9]|$)`).test(f.message),
       isRepaired: (after) => !numSpots(after).some((x) => x.key === key && x.value === bad),
     };
   },

@@ -8,6 +8,8 @@ export type CallOptions = {
   temperature?: number;
   /** Dipakai hanya bila LLM_PROVIDER=mock: menghasilkan objek yang akan dikembalikan sebagai JSON. */
   mock?: () => unknown;
+  /** Dipanggil saat menunggu/coba ulang/pindah model — keterangan untuk pengguna. */
+  onNotice?: (message: string) => void;
 };
 
 /**
@@ -114,7 +116,12 @@ function friendly(e: unknown, model: string, tried: number, waitedMs: number): L
  * (±2, 4, 8, 15, 20 detik, diacak sedikit) selama paling lama LLM_RETRY_BUDGET_MS (bawaan 45 detik, di bawah batas
  * fungsi serverless 60 detik). Galat kuota, key, atau model langsung dilempar tanpa menunggu.
  */
-async function withRetry<T>(fn: () => Promise<T>, model: string, budgetMs = Number(process.env.LLM_RETRY_BUDGET_MS ?? 45000)): Promise<T> {
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  model: string,
+  budgetMs = Number(process.env.LLM_RETRY_BUDGET_MS ?? 45000),
+  onNotice?: (message: string) => void,
+): Promise<T> {
   const t0 = Date.now();
   const delays = [2000, 4000, 8000, 15000, 20000];
   for (let i = 0; ; i++) {
@@ -126,6 +133,9 @@ async function withRetry<T>(fn: () => Promise<T>, model: string, budgetMs = Numb
       const delay = (delays[i] ?? 20000) * (0.8 + Math.random() * 0.4);
       if (classify(e) !== "busy" || waited + delay > budgetMs) throw friendly(e, model, i + 1, waited);
       console.warn(`[llm] ${model}: ${errInfo(e).code || "galat sementara"} — coba ulang ${i + 2} dalam ${Math.round(delay / 1000)} dtk`);
+      onNotice?.(
+        `AI ${model} sedang padat atau lambat (${errInfo(e).code || "tanpa jawaban"}) — percobaan ulang ke-${i + 2} dalam ${Math.round(delay / 1000)} detik. Ini bukan galat; tunggu saja.`,
+      );
       await sleep(delay);
     }
   }
@@ -180,7 +190,7 @@ async function providerCall(system: string, user: string, model: string, tempera
         clearTimeout(timer);
       }
     };
-    const generate = (m: string, budget?: number) => withRetry(() => once(m), m, budget);
+    const generate = (m: string, budget?: number) => withRetry(() => once(m), m, budget, opts.onNotice);
     let res: Awaited<ReturnType<typeof generate>>;
     let used = model;
     const fb = fallbackModel(model);
@@ -200,6 +210,7 @@ async function providerCall(system: string, user: string, model: string, tempera
       // Model yang benar-benar dipakai tercatat di llm_calls.model, jadi bisa disaring saat analisis eksperimen.
       if (!fb || !(e instanceof LlmError) || (e.kind !== "busy" && e.kind !== "model")) throw e;
       primaryBusyUntil.set(model, Date.now() + Number(process.env.LLM_FALLBACK_COOLDOWN_MS ?? 300000));
+      opts.onNotice?.(`Model ${model} padat; memakai model cadangan ${fb}.`);
       console.warn(`[llm] ${model} gagal (${e.kind}); memakai model cadangan ${fb} selama ${Math.round(Number(process.env.LLM_FALLBACK_COOLDOWN_MS ?? 300000) / 60000)} menit`);
       try {
         res = await generate(fb, 30000);
@@ -278,29 +289,66 @@ export async function embed(texts: string[], kind: "document" | "query"): Promis
   if (llmProvider() === "mock" || process.env.EMBEDDING_PROVIDER === "mock") {
     return texts.map((t) => mockEmbedding(t, EMBEDDING_DIM));
   }
-  const ai = await gemini();
   const model = process.env.EMBEDDING_MODEL || "gemini-embedding-001";
-  const out: number[][] = [];
-  for (let i = 0; i < texts.length; i += 100) {
-    const batch = texts.slice(i, i + 100);
-    const res = await withRetry(
-      () =>
-        ai.models.embedContent({
-          model,
-          contents: batch,
-          config: {
-            outputDimensionality: EMBEDDING_DIM,
-            taskType: kind === "document" ? "RETRIEVAL_DOCUMENT" : "RETRIEVAL_QUERY",
-          },
-        }),
-      model,
-    );
-    for (const e of res.embeddings ?? []) out.push(e.values ?? []);
+  // 1) Cache: teks yang sudah pernah diembed (kueri yang sama di setiap run) diambil dari basis data.
+  const { createHash } = await import("node:crypto");
+  const keys = texts.map((t) => createHash("sha256").update(`${model}|${EMBEDDING_DIM}|${kind}|${t}`).digest("hex"));
+  const cached = await readEmbeddingCache(keys);
+  const missing = texts.map((t, i) => ({ t, i })).filter((x) => !cached.has(keys[x.i]));
+  if (missing.length) {
+    const ai = await gemini();
+    // Batas per menit embedding biasanya pulih setelah ±60 dtk → anggaran coba ulang lebih panjang daripada teks.
+    const budget = Number(process.env.EMBED_RETRY_BUDGET_MS ?? 90000);
+    for (let i = 0; i < missing.length; i += 100) {
+      const batch = missing.slice(i, i + 100);
+      const res = await withRetry(
+        () =>
+          ai.models.embedContent({
+            model,
+            contents: batch.map((b) => b.t),
+            config: {
+              outputDimensionality: EMBEDDING_DIM,
+              taskType: kind === "document" ? "RETRIEVAL_DOCUMENT" : "RETRIEVAL_QUERY",
+            },
+          }),
+        model,
+        budget,
+      );
+      const vecs = (res.embeddings ?? []).map((e) => e.values ?? []);
+      if (vecs.length !== batch.length || vecs.some((v) => v.length !== EMBEDDING_DIM))
+        throw new Error(`Dimensi embedding tidak sama dengan EMBEDDING_DIM=${EMBEDDING_DIM}`);
+      batch.forEach((b, j) => cached.set(keys[b.i], vecs[j]));
+      await writeEmbeddingCache(batch.map((b, j) => [keys[b.i], vecs[j]] as [string, number[]]));
+    }
   }
-  if (out.some((v) => v.length !== EMBEDDING_DIM)) {
-    throw new Error(`Dimensi embedding tidak sama dengan EMBEDDING_DIM=${EMBEDDING_DIM}`);
+  return keys.map((k) => cached.get(k)!);
+}
+
+async function readEmbeddingCache(keys: string[]): Promise<Map<string, number[]>> {
+  const out = new Map<string, number[]>();
+  if (!keys.length) return out;
+  try {
+    const { queryRows } = await import("@/lib/db/client");
+    const { sql } = await import("drizzle-orm");
+    const rows = await queryRows<{ key: string; v: string }>(
+      sql`SELECT key, embedding::text AS v FROM embedding_cache WHERE key IN (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})`,
+    );
+    for (const r of rows) out.set(r.key, JSON.parse(r.v));
+  } catch {
+    /* tabel cache belum ada (migrasi belum dijalankan) → tanpa cache */
   }
   return out;
+}
+
+async function writeEmbeddingCache(rows: [string, number[]][]) {
+  try {
+    const { queryRows } = await import("@/lib/db/client");
+    const { sql } = await import("drizzle-orm");
+    for (const [k, v] of rows)
+      await queryRows(sql`INSERT INTO embedding_cache (key, embedding) VALUES (${k}, ${JSON.stringify(v)}::vector) ON CONFLICT (key) DO NOTHING`);
+  } catch {
+    /* cache bersifat tambahan; gagal menyimpan tidak menggagalkan analisis */
+  }
 }
 
 /** Hanya untuk pengujian. */

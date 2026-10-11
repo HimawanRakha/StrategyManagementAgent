@@ -15,8 +15,19 @@ export async function retrieve(projectId: string, queries: RetrievalQuery[], opt
   const only = opts.inputNodeIds?.length ? sql`AND d.input_node IN (${sql.join(opts.inputNodeIds.map((x) => sql`${x}`), sql`, `)})` : sql``;
   const seen = new Map<string, EvidenceChunk>();
   if (queries.length) {
-    await ensureEmbeddings(projectId);
-    const vectors = await embed(queries.map((q) => q.text), "query");
+    let vectors: number[][] | null = null;
+    try {
+      await ensureEmbeddings(projectId);
+      vectors = await embed(queries.map((q) => q.text), "query");
+    } catch (e) {
+      // Layanan embedding padat/kuota habis: analisis tetap jalan dengan pencarian kata kunci (dicatat di log server).
+      console.warn(`[rag] embedding gagal, memakai pencarian kata kunci: ${(e as Error).message.slice(0, 160)}`);
+    }
+    if (!vectors) {
+      for (const c of await keywordSearch(projectId, queries, opts.inputNodeIds)) if (!seen.has(c.id)) seen.set(c.id, c);
+      for (const a of await userAnswers(projectId)) seen.set(a.id, a);
+      return [...seen.values()];
+    }
     for (let i = 0; i < queries.length; i++) {
       const q = queries[i];
       const vec = JSON.stringify(vectors[i]);
@@ -42,6 +53,36 @@ export async function retrieve(projectId: string, queries: RetrievalQuery[], opt
   }
   for (const a of await userAnswers(projectId)) seen.set(a.id, a);
   return [...seen.values()];
+}
+
+/** Cadangan tanpa embedding: skor = jumlah kata kueri (≥ 4 huruf, cocok awalan 5 huruf) yang muncul di potongan. */
+async function keywordSearch(projectId: string, queries: RetrievalQuery[], inputNodeIds?: string[]): Promise<EvidenceChunk[]> {
+  const only = inputNodeIds?.length ? sql`AND d.input_node IN (${sql.join(inputNodeIds.map((x) => sql`${x}`), sql`, `)})` : sql``;
+  const rows = await queryRows<{ label: string; content: string; meta: { filename?: string }; is_values: boolean }>(sql`
+    SELECT c.label, c.content, c.meta, d.is_values FROM chunks c JOIN documents d ON d.id = c.document_id
+    WHERE d.project_id = ${projectId} ${only}`);
+  const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+  const out: EvidenceChunk[] = [];
+  const seen = new Set<string>();
+  for (const q of queries) {
+    const qw = [...new Set(words(q.text))].map((w) => w.slice(0, 5));
+    const scored = rows
+      .filter((r) => !q.valuesOnly || r.is_values)
+      .map((r) => {
+        const cw = words(r.content);
+        const hit = qw.filter((w) => cw.some((c) => c.startsWith(w))).length;
+        return { r, s: qw.length ? hit / qw.length : 0 };
+      })
+      .filter((x) => x.s > 0)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, q.k ?? 8);
+    for (const { r, s } of scored) {
+      if (seen.has(r.label)) continue;
+      seen.add(r.label);
+      out.push({ id: r.label, content: r.content, source: r.meta?.filename ?? "dokumen", similarity: s, focus: `${q.focus} (kata kunci)`, kind: "document" });
+    }
+  }
+  return out;
 }
 
 /**

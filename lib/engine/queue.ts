@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { after } from "next/server";
 import { getDb, schema } from "@/lib/db/client";
 import { loadRunGraph } from "./run-workflow";
-import { runNode } from "./run-node";
+import { recoverStuckNodes, runNode } from "./run-node";
 
 // Mode otomatis penuh: setiap node dijalankan sebagai satu job di antrean.
 // Dengan QSTASH_TOKEN → Upstash QStash memanggil POST /api/jobs/step.
@@ -11,8 +11,15 @@ import { runNode } from "./run-node";
 
 export const MAX_JOB_ATTEMPTS = 3;
 
-export function queueBackend(): "qstash" | "local" {
-  return process.env.QSTASH_TOKEN ? "qstash" : "local";
+/**
+ * qstash  = antrean Upstash (serverless, run tetap jalan walau browser ditutup);
+ * local   = proses server yang sama (dev lokal; proses hidup terus);
+ * browser = Vercel tanpa QStash: fungsi serverless dihentikan setelah respons, jadi rantai di latar belakang putus.
+ *           Run dijalankan oleh browser (tab Eksperimen) satu analisis per permintaan lewat /api/runs/[id]/execute.
+ */
+export function queueBackend(): "qstash" | "local" | "browser" {
+  if (process.env.QSTASH_TOKEN) return "qstash";
+  return process.env.VERCEL ? "browser" : "local";
 }
 
 async function insertJobIfAbsent(runId: string, nodeKey: string) {
@@ -63,14 +70,21 @@ export async function enqueueReady(runId: string) {
 export async function startAuto(runId: string) {
   const db = await getDb();
   const { run } = await loadRunGraph(runId);
-  await db.update(schema.runs).set({ config: { ...run.config, mode: "auto" }, status: "running" }).where(eq(schema.runs.id, runId));
-  // Job gagal sebelumnya dihapus agar node bisa dilanjutkan dari titik terakhir.
-  await db.delete(schema.jobs).where(and(eq(schema.jobs.runId, runId), inArray(schema.jobs.status, ["failed", "queued"])));
+  // Node yang tertinggal "running" (proses mati) ditandai gagal dulu; job "running" miliknya ikut dibersihkan.
+  await recoverStuckNodes(runId);
+  const running = new Set(
+    (await db.select().from(schema.nodeRuns).where(and(eq(schema.nodeRuns.runId, runId), eq(schema.nodeRuns.status, "running")))).map((n) => n.nodeKey),
+  );
+  const jobs = await db.select().from(schema.jobs).where(eq(schema.jobs.runId, runId));
+  const stale = jobs.filter((j) => ["failed", "queued"].includes(j.status) || (j.status === "running" && !running.has(j.nodeKey)));
+  if (stale.length) await db.delete(schema.jobs).where(inArray(schema.jobs.id, stale.map((j) => j.id)));
+  const mode = queueBackend() === "browser" ? "manual" : "auto";
+  await db.update(schema.runs).set({ config: { ...run.config, mode, paused: false }, status: "running" }).where(eq(schema.runs.id, runId));
   await db
     .update(schema.nodeRuns)
     .set({ status: "pending", error: null })
     .where(and(eq(schema.nodeRuns.runId, runId), eq(schema.nodeRuns.status, "failed")));
-  return enqueueReady(runId);
+  return mode === "auto" ? enqueueReady(runId) : [];
 }
 
 /**
@@ -114,4 +128,12 @@ export async function processJob(runId: string, nodeKey: string): Promise<"done"
   }
   await db.update(schema.jobs).set({ status: "failed", lastError: fresh.error, updatedAt: new Date() }).where(eq(schema.jobs.id, job.id));
   return "failed";
+}
+
+/** Hentikan sementara: analisis yang sedang berjalan dibiarkan selesai, analisis berikutnya tidak dimulai. */
+export async function pauseRun(runId: string) {
+  const db = await getDb();
+  const { run } = await loadRunGraph(runId);
+  await db.update(schema.runs).set({ config: { ...run.config, mode: "manual", paused: true } }).where(eq(schema.runs.id, runId));
+  await db.delete(schema.jobs).where(and(eq(schema.jobs.runId, runId), eq(schema.jobs.status, "queued")));
 }

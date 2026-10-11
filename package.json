@@ -14,7 +14,10 @@
     "smoke": "tsx --conditions=react-server scripts/smoke.ts",
     "llm:check": "tsx --conditions=react-server scripts/llm-check.ts",
     "seed:bem": "tsx scripts/seed-bem.ts",
-    "db:copy": "tsx scripts/db-copy.ts"
+    "db:copy": "tsx scripts/db-copy.ts",
+    "eksperimen:ai": "tsx --conditions=react-server scripts/eksperimen-ai.ts",
+    "eksperimen:xlsx": "tsx --conditions=react-server scripts/eksperimen-xlsx.ts",
+    "eksperimen:sweep": "tsx --conditions=react-server scripts/eksperimen-sweep.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

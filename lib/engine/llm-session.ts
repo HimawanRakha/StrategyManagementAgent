@@ -7,6 +7,16 @@ import type { LlmSession } from "@/lib/nodes/types";
 
 export class FormatError extends Error {}
 
+/** Simpan keterangan terkini node (ditampilkan di daftar run & canvas). */
+async function notice(nodeRunId: string, message: string) {
+  try {
+    const db = await getDb();
+    await db.update(schema.nodeRuns).set({ notice: message.slice(0, 500), noticeAt: new Date() }).where(eq(schema.nodeRuns.id, nodeRunId));
+  } catch {
+    /* keterangan bersifat tambahan */
+  }
+}
+
 function parseJson(text: string): unknown {
   const t = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
   try {
@@ -35,7 +45,7 @@ export function createLlmSession(opts: {
       const db = await getDb();
       let prompt = user;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const r = await callLlm(system, prompt, { model: opts.model, temperature: opts.temperature, mock });
+        const r = await callLlm(system, prompt, { model: opts.model, temperature: opts.temperature, mock, onNotice: (m) => void notice(opts.nodeRunId, m) });
         let parsed: z.ZodSafeParseResult<T> | null = null;
         let err = "";
         try {

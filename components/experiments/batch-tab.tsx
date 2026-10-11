@@ -1,5 +1,5 @@
 "use client";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { RunConfig, WorkflowGraph } from "@/lib/db/schema";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Loading, StatusBadge, Table, Textarea, cx } from "@/components/ui";
 import { api, download, fmt, useApi } from "@/lib/client/api";
@@ -171,12 +171,14 @@ function BatchForm({ workflowId, keys, canvas, onCreated }: { workflowId: string
 
 function RunList({ projectId, bump }: { projectId: string; bump: number }) {
   const [poll, setPoll] = useState(false);
-  const { data, error, loading, reload } = useApi<{ runs: RunRow[] }>(`/api/runs?projectId=${projectId}`, poll ? 3000 : undefined);
+  const { data, error, loading, reload } = useApi<{ runs: RunRow[]; backend?: "qstash" | "local" | "browser"; diag?: Record<string, RunDiag> }>(`/api/runs?projectId=${projectId}`, poll ? 3000 : undefined);
   const runs = useMemo(() => (data?.runs ?? []).filter((r) => r.experimentTag !== MAIN_TAG), [data]);
   const active = runs.some((r) => ACTIVE.has(r.status));
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const driver = useBrowserDriver(data?.backend === "browser", runs, reload);
 
   // Polling hanya selama ada run yang menunggu/berjalan.
   if (poll !== active) setPoll(active);
@@ -199,12 +201,15 @@ function RunList({ projectId, bump }: { projectId: string; bump: number }) {
     return [...m.entries()];
   }, [runs]);
 
-  async function act(id: string, what: "start" | "delete") {
+  async function act(id: string, what: "start" | "delete" | "pause") {
     if (what === "delete" && !window.confirm("Hapus run ini beserta seluruh output dan anotasinya? Tindakan ini tidak bisa dibatalkan.")) return;
     setBusy(id + what);
     setErr(null);
     try {
-      if (what === "start") await api(`/api/runs/${id}/start`, { method: "POST" });
+      if (what === "start") {
+        await api(`/api/runs/${id}/start`, { method: "POST" });
+        driver.wake(id);
+      } else if (what === "pause") await api(`/api/runs/${id}/pause`, { method: "POST" });
       else await api(`/api/runs/${id}`, { method: "DELETE" });
       await reload();
     } catch (e) {
@@ -226,7 +231,13 @@ function RunList({ projectId, bump }: { projectId: string; bump: number }) {
   return (
     <Card
       title="Run eksperimen proyek ini"
-      subtitle={active ? "Diperbarui otomatis setiap 3 detik selama ada run yang berjalan." : "Run dijalankan di antrean latar belakang."}
+      subtitle={
+        data?.backend === "browser"
+          ? "Run dijalankan oleh browser ini, satu analisis per langkah (Vercel tanpa QStash). Biarkan tab ini terbuka sampai semua run selesai."
+          : active
+            ? "Diperbarui otomatis setiap 3 detik selama ada run yang berjalan."
+            : "Run dijalankan di antrean latar belakang."
+      }
       actions={
         <Button size="sm" variant="ghost" onClick={() => reload()}>
           Muat ulang
@@ -253,6 +264,20 @@ function RunList({ projectId, bump }: { projectId: string; bump: number }) {
               </span>
             ))}
           </div>
+          {data?.backend === "browser" && active && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md bg-info-soft px-3 py-2 text-xs text-info">
+              <span>
+                {driver.on
+                  ? `Sedang menjalankan run: ${driver.current.length ? driver.current.map((c) => c.slice(0, 8)).join(", ") : "menunggu analisis yang siap…"}.`
+                  : "Dijeda."}{" "}
+                Jangan tutup tab ini selama run berjalan.
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => driver.setOn(!driver.on)}>
+                {driver.on ? "Jeda" : "Lanjutkan menjalankan"}
+              </Button>
+            </div>
+          )}
+          <ErrorBox error={driver.error} />
           <ErrorBox error={err} />
           <Table head={["Tag", "Dibuat", "Status", "Pemeriksaan", "Aksi"]}>
             {runs.map((r) => (
@@ -263,8 +288,12 @@ function RunList({ projectId, bump }: { projectId: string; bump: number }) {
                     <div className="font-mono text-[10px] text-muted">{r.id.slice(0, 8)}</div>
                   </td>
                   <td className="text-xs whitespace-nowrap text-muted">{fmt.date(r.createdAt)}</td>
-                  <td>
-                    <StatusBadge status={r.status} />
+                  <td className="max-w-[340px]">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <StatusBadge status={r.status} />
+                      {r.config?.paused && r.status !== "done" && <Badge tone="warn">dijeda</Badge>}
+                    </div>
+                    {r.status !== "done" && <RunDiagnosis d={data?.diag?.[r.id]} paused={!!r.config?.paused} backend={data?.backend} />}
                   </td>
                   <td>
                     <PlacementList placement={r.config?.placement ?? {}} />
@@ -274,7 +303,18 @@ function RunList({ projectId, bump }: { projectId: string; bump: number }) {
                       <Button size="sm" variant={r.status === "waiting_review" ? "primary" : "ghost"} onClick={() => setOpen(open === r.id ? null : r.id)}>
                         {open === r.id ? "Tutup" : r.status === "waiting_review" ? "Tinjau" : "Detail"}
                       </Button>
-                      {(r.status === "waiting_review" || r.status === "failed" || r.status === "pending") && (
+                      {ACTIVE.has(r.status) && !r.config?.paused && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={busy === r.id + "pause"}
+                          onClick={() => act(r.id, "pause")}
+                          title="Analisis yang sedang berjalan diselesaikan; analisis berikutnya tidak dimulai sampai Anda menekan Lanjutkan"
+                        >
+                          Hentikan sementara
+                        </Button>
+                      )}
+                      {(r.status === "waiting_review" || r.status === "failed" || r.status === "pending" || r.config?.paused || stuck(data?.diag?.[r.id])) && (
                         <Button
                           size="sm"
                           variant="ghost"
@@ -406,6 +446,128 @@ function ReviewBox({ runId, nodeRun, started, onDone }: { runId: string; nodeRun
           <ApiErrorNote message={err} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Penggerak run dari browser (backend "browser" = Vercel tanpa QStash): selama tab terbuka, jalankan analisis siap berikutnya
+ * di setiap run aktif lewat POST /api/runs/[id]/execute (satu analisis per permintaan, ≤ 300 dtk), paling banyak 2 run sekaligus.
+ * Run yang tidak punya analisis siap (menunggu tinjauan / induk gagal) diistirahatkan sampai tombol Lanjutkan ditekan.
+ */
+function useBrowserDriver(enabled: boolean, runs: RunRow[], reload: () => unknown) {
+  const [on, setOn] = useState(true);
+  const [current, setCurrent] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const runsRef = useRef(runs);
+  const idle = useRef(new Set<string>());
+  const busy = useRef(new Set<string>());
+  useEffect(() => {
+    runsRef.current = runs;
+  }, [runs]);
+  useEffect(() => {
+    if (!enabled || !on) return;
+    let stop = false;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const worker = async () => {
+      while (!stop) {
+        const r = runsRef.current.find((x) => ACTIVE.has(x.status) && !x.config?.paused && !busy.current.has(x.id) && !idle.current.has(x.id));
+        if (!r) {
+          await sleep(3000);
+          continue;
+        }
+        busy.current.add(r.id);
+        setCurrent([...busy.current]);
+        try {
+          const res = await api<{ ran: string | null }>(`/api/runs/${r.id}/execute`, { body: {} });
+          if (!res.ran) idle.current.add(r.id);
+          setError(null);
+        } catch (e) {
+          setError(`Run ${r.id.slice(0, 8)}: ${(e as Error).message}`);
+          await sleep(5000);
+        } finally {
+          busy.current.delete(r.id);
+          setCurrent([...busy.current]);
+          void reload();
+        }
+      }
+    };
+    void worker();
+    void worker();
+    return () => {
+      stop = true;
+    };
+  }, [enabled, on, reload]);
+  return { on, setOn, current, error, wake: (id: string) => idle.current.delete(id) };
+}
+
+type RunDiag = {
+  now: string;
+  running: { key: string; phase: string | null; notice: string | null; noticeAt: string | null; startedAt: string | null; lastCall: string | null }[];
+  failed: { key: string; error: string | null }[];
+  review: string[];
+};
+
+const minutesSince = (iso: string | null | undefined, now: string) => (iso ? (new Date(now).getTime() - new Date(iso).getTime()) / 60000 : Infinity);
+
+/** Analisis "berjalan" tanpa tanda kehidupan (tanpa jawaban AI/keterangan) lebih dari 8 menit → hampir pasti prosesnya terputus. */
+function stuck(d: RunDiag | undefined) {
+  return !!d?.running.some((x) => Math.min(minutesSince(x.startedAt, d.now), minutesSince(x.lastCall, d.now), minutesSince(x.noticeAt, d.now)) > 8);
+}
+
+/** Arti galat untuk orang awam + cara mengatasinya. */
+function explainError(e: string): { arti: string; solusi: string } {
+  if (/kuota|quota|per day|PerDay/i.test(e))
+    return { arti: "Kuota/limit API Gemini habis.", solusi: "Tunggu kuota pulih (cek aistudio.google.com/rate-limit), aktifkan billing, atau ganti LLM_MODEL; lalu klik Lanjutkan." };
+  if (/API key|PERMISSION_DENIED|UNAUTHENTICATED|401|403/i.test(e))
+    return { arti: "API key ditolak.", solusi: "Periksa GEMINI_API_KEY di .env.local / Vercel (tanpa spasi), redeploy, lalu klik Lanjutkan." };
+  if (/tidak ditemukan|NOT_FOUND|404/i.test(e))
+    return { arti: "Nama model salah atau tidak tersedia untuk key Anda.", solusi: "Jalankan npm run llm:check dan perbaiki LLM_MODEL, lalu klik Lanjutkan." };
+  if (/terhenti sebelum selesai/i.test(e))
+    return { arti: "Proses server terputus (server dimulai ulang atau batas waktu Vercel).", solusi: "Klik Lanjutkan — analisis diulang dari titik itu." };
+  if (/padat|UNAVAILABLE|503|429|DEADLINE|tidak menjawab/i.test(e))
+    return { arti: "Layanan AI sedang padat/lambat (sementara).", solusi: "Tunggu beberapa menit, lalu klik Lanjutkan." };
+  if (/JSON|skema|format/i.test(e)) return { arti: "Jawaban AI tidak sesuai format yang diminta.", solusi: "Klik Lanjutkan untuk mencoba lagi." };
+  if (/belum selesai/i.test(e)) return { arti: "Analisis sebelumnya gagal atau belum selesai.", solusi: "Perbaiki analisis induknya dulu, lalu klik Lanjutkan." };
+  return { arti: "Galat lain.", solusi: "Baca pesannya; klik Lanjutkan untuk mencoba lagi." };
+}
+
+/** Keterangan langsung di daftar run: apa yang sedang terjadi, dan apa yang harus dilakukan. */
+function RunDiagnosis({ d, paused, backend }: { d: RunDiag | undefined; paused: boolean; backend?: string }) {
+  if (!d) return null;
+  const lines: { tone: "info" | "warn" | "danger"; text: string; hint?: string }[] = [];
+  for (const x of d.running) {
+    const mins = minutesSince(x.startedAt, d.now);
+    const quiet = Math.min(mins, minutesSince(x.lastCall, d.now), minutesSince(x.noticeAt, d.now));
+    if (quiet > 8)
+      lines.push({
+        tone: "danger",
+        text: `${nodeLabel(x.key)}: tidak ada aktivitas selama ${Math.round(quiet)} menit — prosesnya kemungkinan besar terputus${backend === "browser" ? " (tab ditutup / batas waktu Vercel)" : " (server dimulai ulang)"}.`,
+        hint: "Klik Lanjutkan; analisis ini diulang dari awal tanpa mengulang analisis yang sudah selesai.",
+      });
+    else if (x.notice && minutesSince(x.noticeAt, d.now) < 3) lines.push({ tone: "warn", text: `${nodeLabel(x.key)}: ${x.notice}` });
+    else
+      lines.push({
+        tone: "info",
+        text: `Sedang mengerjakan ${nodeLabel(x.key)} (${x.phase === "validate" ? "memeriksa" : x.phase === "repair" ? "memperbaiki" : x.phase === "retrieve" ? "mencari bukti" : "menulis"}, ${Math.max(0, Math.round(mins))} mnt). Satu jawaban AI biasanya 10–60 dtk.`,
+      });
+  }
+  for (const f of d.failed) {
+    const ex = explainError(f.error ?? "");
+    lines.push({ tone: "danger", text: `${nodeLabel(f.key)} gagal — ${ex.arti}`, hint: `${ex.solusi}${f.error ? ` (Pesan: ${f.error.slice(0, 160)})` : ""}` });
+  }
+  if (d.review.length) lines.push({ tone: "warn", text: `Menunggu tinjauan Anda: ${d.review.map(nodeLabel).join(", ")}.`, hint: "Klik Tinjau, setujui/tolak, lalu klik Lanjutkan." });
+  if (paused) lines.push({ tone: "warn", text: "Dijeda oleh Anda.", hint: "Klik Lanjutkan untuk meneruskan." });
+  if (!lines.length) return null;
+  const cls = { info: "text-info", warn: "text-warn", danger: "text-danger" } as const;
+  return (
+    <div className="mt-1 space-y-1">
+      {lines.map((l, i) => (
+        <div key={i} className={cx("text-[11px] leading-snug", cls[l.tone])}>
+          {l.text}
+          {l.hint && <div className="text-muted">{l.hint}</div>}
+        </div>
+      ))}
     </div>
   );
 }

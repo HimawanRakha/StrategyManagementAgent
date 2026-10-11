@@ -204,6 +204,8 @@ async function runNodeInner(nodeRunId: string): Promise<NodeRunStatus> {
       // Hasil baru dari AI menggantikan hasil lama beserta perubahan manusia di atasnya.
       edits: [],
       editedAt: null,
+      notice: null,
+      noticeAt: null,
       attempts: sql`${schema.nodeRuns.attempts} + 1`,
     })
     .where(eq(schema.nodeRuns.id, nodeRunId));

@@ -133,6 +133,8 @@ export type RunConfig = {
   model?: string;
   temperature?: number;
   mode?: "manual" | "auto";
+  /** Dihentikan sementara oleh pengguna: analisis yang sedang berjalan diselesaikan, berikutnya tidak dimulai. */
+  paused?: boolean;
 };
 
 export const runs = pgTable("runs", {
@@ -167,6 +169,9 @@ export const nodeRuns = pgTable("node_runs", {
   /** Riwayat perubahan manusia pada output mentah. */
   edits: jsonb("edits").$type<NodeEdit[]>().notNull().default([]),
   editedAt: timestamp("edited_at", { withTimezone: true }),
+  /** Keterangan terkini saat berjalan (menunggu AI, coba ulang, pindah model). */
+  notice: text("notice"),
+  noticeAt: timestamp("notice_at", { withTimezone: true }),
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
