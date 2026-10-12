@@ -108,6 +108,13 @@ export function docToBlocks(d: GrandDesignDoc): Block[] {
     for (const s of custom) b.push(...sectionBlocks(s));
   }
 
+  b.push(...appendixBlocks(d));
+  return b;
+}
+
+/** Lampiran A (jejak rujukan), B (sumber kutipan), C (galat dan pemeriksaan) — dipakai dokumen grand design dan laporan kajian. */
+export function appendixBlocks(d: GrandDesignDoc): Block[] {
+  const b: Block[] = [];
   // Lampiran A: jejak rujukan
   b.push({ type: "h1", text: "Lampiran A. Jejak rujukan" });
   b.push({

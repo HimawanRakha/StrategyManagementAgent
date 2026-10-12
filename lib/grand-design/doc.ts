@@ -61,6 +61,8 @@ export type DocSection = {
 export type GrandDesignDoc = {
   projectName: string;
   orgType: string | null;
+  /** Deskripsi proyek/organisasi (diisi pengguna saat membuat proyek). */
+  description: string | null;
   runId: string;
   experimentTag: string;
   generatedAt: string;

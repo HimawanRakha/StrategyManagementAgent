@@ -6,6 +6,8 @@ import type { DocSection, GrandDesignDoc } from "@/lib/grand-design/doc";
 import { summarizeEdits, collectCitations } from "@/lib/grand-design/doc";
 import { grandDesignXlsx, normalizeFormula, resolvePlaceholders } from "@/lib/export/xlsx";
 import { docToBlocks } from "@/lib/export/blocks";
+import { docToReport, titleCase } from "@/lib/export/report";
+import { cellText } from "@/lib/export/pdf";
 import { checkTraceComplete, traceChains, buildTraceIndex } from "@/lib/grand-design/trace";
 import { validateSummaryRefs, validElementIds } from "@/lib/validators/phase2";
 
@@ -114,6 +116,7 @@ function makeDoc(): GrandDesignDoc {
   return {
     projectName: "BEM Uji",
     orgType: "BEM",
+    description: "Organisasi uji untuk tes ekspor.",
     runId: "12345678-aaaa-bbbb-cccc-1234567890ab",
     experimentTag: "utama",
     generatedAt: "2026-10-07T10:00:00.000Z",
@@ -327,5 +330,39 @@ describe("jejak rujukan node baru", () => {
 
   it("kutipan dikumpulkan dari evidence dan refs berlabel C/U", () => {
     expect([...collectCitations({ a: [{ evidence: [{ chunkId: "C3", quote: "q" }] }], b: { refs: ["U2", "S1"] } })].sort()).toEqual(["C3", "U2"]);
+  });
+});
+
+describe("laporan kajian (PDF)", () => {
+  it("sampul, BAB I–IV, daftar pustaka, lampiran; analisis memakai sheet Excel; bagian yang tidak ada tidak muncul", () => {
+    const { blocks, toc } = docToReport(makeDoc());
+    const titles = toc.map((e) => e.text);
+    expect(blocks[0].type).toBe("cover");
+    expect(titles.filter((x) => x.startsWith("BAB "))).toEqual(["BAB I PENDAHULUAN", "BAB II ANALISIS BEM UJI", "BAB III PEMBAHASAN DAN REKOMENDASI", "BAB IV KESIMPULAN"]);
+    expect(titles).toContain("DAFTAR PUSTAKA");
+    expect(titles).toContain("LAMPIRAN");
+    // IFAS tersedia → subbab dengan tabel ala sheet Excel (bukan tabel ringkas) dan judul tabel bernomor
+    expect(titles).toContain("2.2.1 IFAS");
+    const i = blocks.findIndex((b) => b.type === "h3" && b.text === "2.2.1 IFAS");
+    const after = blocks.slice(i, i + 6);
+    expect(after.some((b) => b.type === "grid" && b.grid.id === "ifas")).toBe(true);
+    expect(after.some((b) => b.type === "caption" && /^Tabel 2\.\d+ Matriks IFAS/.test(b.text))).toBe(true);
+    // EFAS gagal → tidak dimunculkan sama sekali
+    expect(titles.some((x) => x.includes("EFAS"))).toBe(false);
+    // Referensi metode hanya untuk analisis yang ada (QSPM tidak ada → David tidak dicantumkan; posisi ada → Weihrich ada)
+    const refs = blocks.filter((b) => b.type === "bullets").flatMap((b) => b.items).join(" ");
+    expect(refs).toContain("Weihrich");
+    expect(refs).not.toContain("David, F. R.");
+  });
+
+  it("format sel seperti Excel dan judul huruf kapital dirapikan", () => {
+    expect(cellText({ r: 0, c: 0, v: 0.2838, fmt: "0.000" })).toBe("0,284");
+    expect(cellText({ r: 0, c: 0, v: 0.125, fmt: "0.0%" })).toBe("12,5%");
+    expect(cellText({ r: 0, c: 0, v: 3, style: "int" })).toBe("3");
+    expect(cellText({ r: 0, c: 0, v: 0.3333, display: "1/3" })).toBe("1/3");
+    expect(cellText({ r: 0, c: 0, v: null })).toBe("");
+    expect(titleCase("KONDISI IDEAL ORGANISASI")).toBe("Kondisi Ideal Organisasi");
+    expect(titleCase("IFAS")).toBe("Ifas");
+    expect(titleCase("Gap analysis")).toBe("Gap analysis");
   });
 });

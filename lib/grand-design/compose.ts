@@ -150,6 +150,7 @@ export async function composeGrandDesign(runId: string, keys?: string[], labels:
   return {
     projectName: project.name,
     orgType: project.orgType,
+    description: project.description ?? null,
     runId,
     experimentTag: run.experimentTag,
     generatedAt: new Date().toISOString(),
