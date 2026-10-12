@@ -115,8 +115,8 @@ export function ReportPanel(props: {
   const averaged = datasets.length > 1 ? datasets.length : undefined;
 
   // ---------- Angka model (disimpan per proyek) ----------
-  // Profil parameter sesuai model AI canvas (LLM_MODEL di server); profil kosong → semua asumsi.
-  const params = useApi<ParamsApi>("/api/experiments/parameters?model=default");
+  // Profil parameter: run proyek INI dengan model AI canvas (LLM_MODEL di server); profil kosong → semua asumsi.
+  const params = useApi<ParamsApi>(`/api/experiments/parameters?model=default&project=${encodeURIComponent(projectId)}`);
   const [saved] = useState(() => loadSettings(projectId));
   const [edits, setEdits] = useState<ParamEdits>(saved?.edits ?? {});
   const [dhStr, setDhStr] = useState<string | null>(saved?.dh ?? null);

@@ -49,3 +49,6 @@ next-env.d.ts
 # hasil eksperimen lokal (data & label penilai) dan file uji sementara — tidak di-commit
 /hasil-eksperimen/
 *.tmp.ts
+
+# catatan TA lokal (referensi, draf) — tidak di-commit
+/catatan-ta/

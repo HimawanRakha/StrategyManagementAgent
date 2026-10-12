@@ -52,7 +52,7 @@ export type ModelControls = {
   /** Anggaran disarankan ("titik siku") dari angka model. */
   suggestion: { tok: number; min: number; p: number; pMax: number } | null;
   /** Profil parameter (model AI yang datanya dipakai). */
-  profile: { model: string; runs: number; measuredAt: string | null } | null;
+  profile: { model: string | null; projectName?: string | null; runs: number; measuredAt: string | null } | null;
   bad: { bTok: boolean; bMin: boolean; dh: boolean };
   paramsLoading: boolean;
   paramsError: string | null;
@@ -484,12 +484,15 @@ function ParamTable({ graph, data, c }: { graph: WorkflowGraph; data: ReportProj
       <p className="mb-2 text-[12px] text-muted">
         {c.profile && c.profile.runs > 0 ? (
           <>
-            Profil: <b className="text-text">{c.profile.model}</b> · {c.profile.runs} run{c.profile.measuredAt ? ` · diukur ${c.profile.measuredAt}` : ""}. Angka terukur hanya
-            diambil dari run model ini.
+            Profil: <b className="text-text">{c.profile.projectName ?? "proyek ini"}</b>
+            {c.profile.model ? <> · {c.profile.model}</> : null} · {c.profile.runs} run{c.profile.measuredAt ? ` · diukur ${c.profile.measuredAt}` : ""}. Angka terukur
+            hanya diambil dari run proyek ini dengan model ini — data proyek lain tidak ikut.
           </>
         ) : c.profile ? (
           <span className="text-warn">
-            Profil: {c.profile.model} · belum ada run untuk model ini — semua angka memakai asumsi, jadi rekomendasi hanya <b>perkiraan kasar</b>.
+            Profil: {c.profile.projectName ?? "proyek ini"}
+            {c.profile.model ? ` · ${c.profile.model}` : ""} · belum ada run untuk proyek dan model ini — semua angka memakai asumsi, jadi rekomendasi hanya{" "}
+            <b>perkiraan kasar</b>.
           </span>
         ) : null}
       </p>

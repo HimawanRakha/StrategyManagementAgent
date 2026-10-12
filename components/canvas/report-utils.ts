@@ -61,7 +61,7 @@ export type ParamsApi = {
   }[];
   dh: number;
   /** Profil parameter: model AI yang datanya dipakai. Null/0 run = belum ada data untuk model ini. */
-  profile?: { model: string; runs: number; measuredAt: string | null } | null;
+  profile?: { model: string | null; projectName?: string | null; runs: number; measuredAt: string | null } | null;
 };
 
 /** Kisi anggaran untuk saran anggaran otomatis ("titik siku"). */

@@ -67,22 +67,31 @@ function runFilter(runIds: string[] | null | undefined, col: ReturnType<typeof s
 }
 
 /**
- * Run yang dibuat dengan model AI tertentu (profil parameter per model). Model run dibaca dari config.model,
+ * Run untuk profil parameter: run satu proyek (organisasi) dan/atau satu model AI. Model run dibaca dari config.model,
  * atau dari model panggilan "generate" bila config tidak mencatatnya.
  */
-export async function runsOfModel(model: string) {
+export async function profileRuns(p: { model?: string; projectId?: string }) {
   return queryRows<{ id: string; created_at: string }>(sql`
-    SELECT r.id, r.created_at FROM runs r
-    WHERE r.config->>'model' = ${model}
-       OR (r.config->>'model' IS NULL AND EXISTS (
-            SELECT 1 FROM llm_calls c JOIN node_runs nr ON nr.id = c.node_run_id
-            WHERE nr.run_id = r.id AND c.purpose = 'generate' AND c.model = ${model}))`);
+    SELECT r.id, r.created_at FROM runs r JOIN workflows w ON w.id = r.workflow_id
+    WHERE TRUE
+      ${p.projectId ? sql`AND w.project_id = ${p.projectId}` : sql``}
+      ${
+        p.model
+          ? sql`AND (r.config->>'model' = ${p.model}
+                 OR (r.config->>'model' IS NULL AND EXISTS (
+                   SELECT 1 FROM llm_calls c JOIN node_runs nr ON nr.id = c.node_run_id
+                   WHERE nr.run_id = r.id AND c.purpose = 'generate' AND c.model = ${p.model})))`
+          : sql``
+      }`);
 }
 
-/** Hitung e, d, r, h, biaya, kappa, dan interval Wilson per tahap. `model` membatasi ke run model itu (profil). */
-export async function computeParameters(opts: { tag?: string; model?: string } = {}) {
+/**
+ * Hitung e, d, r, h, biaya, kappa, dan interval Wilson per tahap.
+ * `projectId` dan/atau `model` membatasi ke run proyek/model itu (profil parameter); tanpa keduanya semua run dipakai.
+ */
+export async function computeParameters(opts: { tag?: string; model?: string; projectId?: string } = {}) {
   const db = await getDb();
-  const modelRuns = opts.model ? await runsOfModel(opts.model) : null;
+  const modelRuns = opts.model || opts.projectId ? await profileRuns({ model: opts.model, projectId: opts.projectId }) : null;
   const runIds = modelRuns ? modelRuns.map((r) => r.id) : null;
   const { all, baseline, rows: verdictRows } = await loadVerdicts({ tag: opts.tag, runIds });
   // Analisis bawaan + semua analisis yang pernah dijalankan (termasuk kustom). Induk kustom diambil dari input node run.
@@ -207,7 +216,11 @@ export async function computeParameters(opts: { tag?: string; model?: string } =
     qspmTau: await qspmStability(opts.tag, runIds),
     /** Profil model: run yang dipakai dan bulan pengukuran terakhir (null bila tidak difilter per model). */
     profile: modelRuns
-      ? { model: opts.model!, runs: modelRuns.length, measuredAt: modelRuns.length ? new Date(modelRuns.map((r) => new Date(r.created_at).getTime()).reduce((a, b) => Math.max(a, b))).toISOString().slice(0, 7) : null }
+      ? {
+          model: opts.model ?? null,
+          projectId: opts.projectId ?? null,
+          projectName: opts.projectId ? ((await db.select({ n: schema.projects.name }).from(schema.projects).where(eq(schema.projects.id, opts.projectId)))[0]?.n ?? null) : null,
+          runs: modelRuns.length, measuredAt: modelRuns.length ? new Date(modelRuns.map((r) => new Date(r.created_at).getTime()).reduce((a, b) => Math.max(a, b))).toISOString().slice(0, 7) : null }
       : null,
   };
 }
