@@ -2,6 +2,7 @@
 // Panel node proses (bawaan & kustom): jalankan, lihat hasil sebagai sheet ala Excel (bisa diubah) + rumusnya,
 // jawab pertanyaan AI, tinjau, pemeriksaan (validator/tinjauan yang tersambung), dan pengaturan node.
 import { useMemo, useState } from "react";
+import { PromptSection } from "./prompt-section";
 import { Badge, Button, ErrorBox, Spinner, Textarea, cx } from "@/components/ui";
 import { api, fmt } from "@/lib/client/api";
 import { NODE_META, type NodeKey } from "@/lib/nodes/meta";
@@ -463,6 +464,7 @@ export function ProcessPanel({
 
       <ChecksSection checks={checks} canValidate={custom || !!meta?.hasValidator} onAdd={onAddCheck} onRemove={onRemoveNode} onSelect={onSelect} />
       <NodeSettingsSection data={data} defaultLabel={defaultLabel} done={done} onChange={onChange} />
+      <PromptSection nodeRunId={state?.nodeRunId} />
       <TechDetails nodeKey={key} state={state} />
     </div>
   );
