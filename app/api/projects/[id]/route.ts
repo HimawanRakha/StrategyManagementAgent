@@ -22,8 +22,11 @@ export const GET = handle(async (_req: Request, ctx: Ctx) => {
   const run = await getMainRun(wf.id);
   if (run) await recoverStuckNodes(run.id); // node "berjalan" yang prosesnya sudah mati → gagal, bisa dicoba lagi
 
-  const documents = await queryRows<{ id: string; filename: string; input_node: string | null; is_values: boolean; created_at: string; chars: number; chunks: number }>(sql`
-    SELECT d.id, d.filename, d.input_node, d.is_values, d.created_at, length(d.raw_text)::int AS chars,
+  const documents = await queryRows<{
+    id: string; filename: string; input_node: string | null; is_values: boolean; created_at: string; chars: number; chunks: number;
+    reviewed_at: string | null; quality: unknown;
+  }>(sql`
+    SELECT d.id, d.filename, d.input_node, d.is_values, d.created_at, d.reviewed_at, d.quality, length(d.raw_text)::int AS chars,
            (SELECT COUNT(*)::int FROM chunks c WHERE c.document_id = d.id) AS chunks
     FROM documents d WHERE d.project_id = ${id} ORDER BY d.created_at`);
 

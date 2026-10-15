@@ -25,7 +25,16 @@ export const documents = pgTable("documents", {
   isValues: boolean("is_values").notNull().default(false),
   inputNode: text("input_node"), // ID node input di canvas
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Disetujui pengguna; dokumen yang belum ditinjau tidak dibaca analisis. */
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  /** Hasil pemeriksaan otomatis saat unggah (lihat lib/rag/quality.ts). */
+  quality: jsonb("quality").$type<DocQuality>().notNull().default({} as DocQuality),
 });
+
+export type DocQuality = {
+  warnings?: { code: string; message: string }[];
+  stats?: { chars: number; chunks: number; avgChunk: number; minChunk: number; maxChunk: number };
+};
 
 export const chunks = pgTable("chunks", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -135,6 +144,8 @@ export type RunConfig = {
   mode?: "manual" | "auto";
   /** Dihentikan sementara oleh pengguna: analisis yang sedang berjalan diselesaikan, berikutnya tidak dimulai. */
   paused?: boolean;
+  /** Memori inti organisasi disisipkan ke prompt setiap analisis (bawaan: aktif; false untuk run pembanding eksperimen). */
+  contextMemory?: boolean;
 };
 
 export const runs = pgTable("runs", {
@@ -185,7 +196,12 @@ export type EvidenceChunk = {
   focus?: string;        // fokus kueri yang menemukannya
   kind: "document" | "user_answer";
 };
-export type NodeRunInput = { evidence: EvidenceChunk[]; parents: string[] };
+export type NodeRunInput = {
+  evidence: EvidenceChunk[];
+  parents: string[];
+  /** Memori inti organisasi yang disisipkan ke prompt (null = tidak dipakai). */
+  memory?: string | null;
+};
 /** Satu perubahan manusia pada output mentah node: path (mis. ["ratings",0,"values",2,"rating"]), nilai lama → baru. */
 export type NodeEdit = { path: (string | number)[]; from: unknown; to: unknown; at: string };
 

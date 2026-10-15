@@ -45,7 +45,11 @@ export const GET = handle(async (_req: Request, ctx: Ctx) => {
     hasRun: !!nr.startedAt,
     evidenceCount: nctx.evidence.length,
     queries,
-    system: prompt?.system ?? null,
+    // Memori inti yang dipakai saat analisis ini dijalankan (tersimpan di node run) ikut ditampilkan di akhir System.
+    system: prompt?.system ? (nr.input?.memory ? `${prompt.system}
+
+${nr.input.memory}` : prompt.system) : null,
+    memory: nr.input?.memory ?? null,
     user: prompt?.user ?? null,
     config: {
       model: used?.model || settings.model || run.config.model || defaultModel(),

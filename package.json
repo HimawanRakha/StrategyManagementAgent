@@ -17,7 +17,9 @@
     "db:copy": "tsx scripts/db-copy.ts",
     "eksperimen:ai": "tsx --conditions=react-server scripts/eksperimen-ai.ts",
     "eksperimen:xlsx": "tsx --conditions=react-server scripts/eksperimen-xlsx.ts",
-    "eksperimen:sweep": "tsx --conditions=react-server scripts/eksperimen-sweep.ts"
+    "eksperimen:sweep": "tsx --conditions=react-server scripts/eksperimen-sweep.ts",
+    "eval:rag": "tsx --conditions=react-server scripts/eval-rag.ts",
+    "eval:memori": "tsx --conditions=react-server scripts/eval-memori.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

@@ -41,6 +41,8 @@ import {
 } from "./report-utils";
 import { ConclusionSection, FindingsSection, HowToRead, SummarySection } from "./report-sections";
 import { FormulasSection, RecommendationSection, type ModelControls } from "./report-model";
+import { nextSteps, type NextAction } from "./next-steps";
+import { NextStepsSection } from "./next-steps-section";
 
 export type { ReportProjectData } from "./report-utils";
 
@@ -61,6 +63,7 @@ const SECTIONS = [
   { id: "galat", label: "Galat & temuan" },
   { id: "rumus", label: "Rumus" },
   { id: "rekomendasi", label: "Rekomendasi" },
+  { id: "saran", label: "Saran langkah" },
   { id: "kesimpulan", label: "Kesimpulan" },
 ] as const;
 
@@ -77,6 +80,8 @@ export function ReportPanel(props: {
   data: ReportProjectData;
   running: boolean;
   onApplyPlacement: (placement: Placement) => void;
+  /** Aksi dari "Saran langkah berikutnya" (tambah node ke canvas, sorot analisis). */
+  onSuggestion?: (action: NextAction) => void;
   onSelectNode?: (engineKey: string) => void;
   onClose: () => void;
 }) {
@@ -113,6 +118,8 @@ export function ReportPanel(props: {
     return mergeFindings(datasets.map((d) => collectFindings(graph, d)), labels);
   }, [graph, datasets, groups, tagSel]);
   const averaged = datasets.length > 1 ? datasets.length : undefined;
+  // Saran selalu untuk canvas sekarang (run utama), apa pun run yang sedang dilihat.
+  const suggestions = useMemo(() => nextSteps(graph, mainData), [graph, mainData]);
 
   // ---------- Angka model (disimpan per proyek) ----------
   // Profil parameter: run proyek INI dengan model AI canvas (LLM_MODEL di server); profil kosong → semua asumsi.
@@ -224,6 +231,7 @@ export function ReportPanel(props: {
       <Badge tone="warn">{findings.totals.sedang}</Badge>
     ) : null,
     rekomendasi: changes.length ? <Badge tone="primary">{changes.length}</Badge> : null,
+    saran: suggestions.some((s) => s.priority === 1) ? <Badge tone="danger">{suggestions.filter((s) => s.priority === 1).length}</Badge> : null,
   };
 
   return (
@@ -322,7 +330,14 @@ export function ReportPanel(props: {
               onApply={props.onApplyPlacement}
             />
           </Section>
-          <Section id={`${uid}-kesimpulan`} n={6} title="Kesimpulan">
+          <Section id={`${uid}-saran`} n={6} title="Saran langkah berikutnya">
+            <NextStepsSection
+              suggestions={suggestions}
+              running={running}
+              onAction={(a) => (a.type === "select" ? props.onSelectNode?.(a.key) : props.onSuggestion?.(a))}
+            />
+          </Section>
+          <Section id={`${uid}-kesimpulan`} n={7} title="Kesimpulan">
             <ConclusionSection conclusion={conclusion} hasRun={!!data.runId} onSelectNode={props.onSelectNode} modelReady={!!model || !keys.length} />
           </Section>
         </div>

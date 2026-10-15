@@ -13,6 +13,8 @@ import { ASSUMED, ASSUMED_WHY, FEW_DATA_N, MIN_N_USE } from "@/lib/experiment/as
 
 /** Bagian respons GET /api/projects/[id] yang dipakai laporan (kompatibel dengan ProjectData di types.ts). */
 export type ReportNode = {
+  /** Potongan bukti yang diambil RAG (kemiripan kosinus bila dari pencarian vektor). */
+  evidence?: { id: string; similarity?: number; kind?: string }[];
   nodeRunId?: string;
   status: string;
   phase?: string | null;
@@ -41,6 +43,8 @@ export type ReportProjectData = {
   runId: string | null;
   nodes: Record<string, ReportNode>;
   questions: { id: string; nodeKey: string; question: string; answer: string | null; nodeRunId?: string }[];
+  /** Dokumen proyek (untuk saran: dokumen belum ditinjau / lebih baru dari analisis). */
+  documents?: { filename: string; reviewed_at?: string | null }[];
 };
 
 /** Respons GET /api/experiments/parameters (hanya kolom yang dipakai; NaN menjadi null setelah JSON). */

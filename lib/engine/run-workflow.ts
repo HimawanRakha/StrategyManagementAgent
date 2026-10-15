@@ -24,6 +24,8 @@ export async function createRun(input: {
   temperature?: number;
   mode?: "manual" | "auto";
   createdBy?: string;
+  /** Memori inti organisasi (bawaan: aktif). */
+  contextMemory?: boolean;
 }) {
   const db = await getDb();
   const [wf] = await db.select().from(schema.workflows).where(eq(schema.workflows.id, input.workflowId));
@@ -43,6 +45,7 @@ export async function createRun(input: {
     model: input.model || undefined,
     temperature: input.temperature,
     mode: input.mode ?? "manual",
+    contextMemory: input.contextMemory ?? true,
   };
   const [run] = await db
     .insert(schema.runs)

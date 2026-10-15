@@ -7,7 +7,23 @@ import type { DocRow, FlowData } from "./types";
 
 type Chunk = { id: string; label: string; content: string };
 
-function DocItem({ doc, onDeleted }: { doc: DocRow; onDeleted: () => void }) {
+function DocItem({ doc, affected, onDeleted, onChanged }: { doc: DocRow; affected: string[]; onDeleted: () => void; onChanged: () => void }) {
+  const pending = !doc.reviewed_at;
+  const warnings = doc.quality?.warnings ?? [];
+  const [approvedNow, setApprovedNow] = useState(false);
+  async function review(action: "approve" | "unapprove") {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/documents/${doc.id}`, { method: "POST", body: { action } });
+      setApprovedNow(action === "approve");
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const [open, setOpen] = useState(false);
   const [chunks, setChunks] = useState<Chunk[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,7 +58,9 @@ function DocItem({ doc, onDeleted }: { doc: DocRow; onDeleted: () => void }) {
         <button type="button" onClick={toggle} className="min-w-0 flex-1 text-left" title="Lihat potongan dokumen">
           <div className="truncate text-sm font-medium">{doc.filename}</div>
           <div className="text-[11px] text-muted">
-            {doc.chunks} potongan · {fmt.int(doc.chars)} karakter {doc.is_values && <Badge tone="accent">nilai</Badge>}
+            {doc.chunks} potongan · {fmt.int(doc.chars)} karakter {doc.is_values && <Badge tone="accent">nilai</Badge>}{" "}
+            {pending ? <Badge tone="warn">perlu ditinjau</Badge> : <Badge tone="ok">disetujui</Badge>}
+            {warnings.length > 0 && <Badge tone="warn">{warnings.length} peringatan</Badge>}
           </div>
         </button>
         <span className="text-xs text-muted">{open ? "▾" : "▸"}</span>
@@ -51,6 +69,40 @@ function DocItem({ doc, onDeleted }: { doc: DocRow; onDeleted: () => void }) {
         </Button>
       </div>
       <ErrorBox error={error} />
+      {(pending || warnings.length > 0) && (
+        <div className="space-y-1.5 border-t border-border px-2.5 py-2 text-[11.5px]">
+          {pending && (
+            <p className="text-warn">
+              Dokumen ini <b>belum dibaca analisis</b>. Buka potongannya, pastikan isinya terbaca benar, lalu setujui.
+            </p>
+          )}
+          {warnings.length > 0 && (
+            <ul className="list-disc space-y-0.5 pl-4 text-warn">
+              {warnings.map((w) => (
+                <li key={w.code}>{w.message}</li>
+              ))}
+            </ul>
+          )}
+          {pending ? (
+            <Button size="sm" variant="primary" onClick={() => review("approve")} loading={busy}>
+              Setujui dokumen
+            </Button>
+          ) : null}
+        </div>
+      )}
+      {approvedNow && (
+        <p className="border-t border-border px-2.5 py-2 text-[11.5px] text-ok">
+          Disetujui. Analisis yang membaca dokumen ini perlu dijalankan ulang agar memakainya
+          {affected.length ? `: ${affected.join(", ")}` : " (analisis tanpa input tersambung membaca seluruh dokumen proyek)"}.
+        </p>
+      )}
+      {!pending && !approvedNow && (
+        <div className="border-t border-border px-2.5 py-1 text-right">
+          <button type="button" className="text-[11px] text-muted hover:text-text hover:underline" onClick={() => review("unapprove")}>
+            Batalkan persetujuan (berhenti dibaca analisis)
+          </button>
+        </div>
+      )}
       {open && (
         <div className="max-h-80 space-y-1.5 overflow-y-auto border-t border-border bg-surface-2/50 p-2">
           {!chunks ? (
@@ -80,6 +132,7 @@ export function InputPanel({
   nodeId,
   data,
   docs,
+  affected,
   onChange,
   onChanged,
 }: {
@@ -87,6 +140,8 @@ export function InputPanel({
   nodeId: string;
   data: FlowData;
   docs: DocRow[];
+  /** Nama analisis yang panahnya menerima input ini (terdampak bila dokumennya berubah). */
+  affected?: string[];
   onChange: (patch: Partial<FlowData>) => void;
   onChanged: () => void;
 }) {
@@ -189,14 +244,14 @@ export function InputPanel({
         {docs.length ? (
           <ul className="space-y-1.5">
             {docs.map((d) => (
-              <DocItem key={d.id} doc={d} onDeleted={onChanged} />
+              <DocItem key={d.id} doc={d} affected={affected ?? []} onDeleted={onChanged} onChanged={onChanged} />
             ))}
           </ul>
         ) : (
           <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted">Belum ada dokumen. Unggah file atau tempel teks di atas.</p>
         )}
         <p className="text-[11px] text-muted">
-          Klik dokumen untuk melihat potongannya (label seperti <span className="font-mono">C12</span> dipakai sebagai rujukan di hasil analisis). Analisis yang panahnya
+          Dokumen baru <b>ditinjau dulu</b>: periksa peringatan dan potongannya, lalu tekan Setujui — sebelum disetujui, analisis tidak membacanya. Klik dokumen untuk melihat potongannya (label seperti <span className="font-mono">C12</span> dipakai sebagai rujukan di hasil analisis). Analisis yang panahnya
           menerima input ini hanya membaca dokumen dari input yang tersambung; analisis tanpa input tersambung membaca seluruh dokumen proyek (bisa diatur di Pengaturan node).
         </p>
       </div>

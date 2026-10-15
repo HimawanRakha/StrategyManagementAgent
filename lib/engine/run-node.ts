@@ -8,6 +8,7 @@ import { pretty } from "@/lib/nodes/prompt";
 import { createLlmSession } from "./llm-session";
 import { canvasNodeOf, connectedInputIds, labelOf as labelOfKey, normalizeGraph } from "./canvas";
 import { resolveNode } from "./resolve";
+import { coreMemory } from "./memory";
 
 export const MAX_REPAIR_ATTEMPTS = Number(process.env.MAX_REPAIR_ATTEMPTS ?? 2);
 
@@ -235,9 +236,11 @@ async function runNodeInner(nodeRunId: string): Promise<NodeRunStatus> {
 
     const cnode = canvasNodeOf(graph, nr.nodeKey);
     ctx.evidence = await gatherEvidence(def, ctx, cnode ? connectedInputIds(graph, cnode.id) : [], settings.sourceScope);
+    // Memori inti organisasi (context engineering): ringkasan tetap dari analisis yang sudah selesai.
+    const memory = run.config.contextMemory === false || def.kind === "code" ? null : coreMemory(ctx, nr.nodeKey);
     await db
       .update(schema.nodeRuns)
-      .set({ input: { evidence: ctx.evidence, parents: Object.keys(ctx.inputs) } })
+      .set({ input: { evidence: ctx.evidence, parents: Object.keys(ctx.inputs), memory } })
       .where(eq(schema.nodeRuns.id, nodeRunId));
 
     await setPhase(nodeRunId, "generate");
@@ -246,7 +249,9 @@ async function runNodeInner(nodeRunId: string): Promise<NodeRunStatus> {
       out = await def.run!(ctx, llm);
     } else {
       const p = def.prompt!(ctx);
-      out = await llm.json("generate", p.system, p.user, def.schema, () => def.mock!(ctx)); // purpose: generate
+      out = await llm.json("generate", memory ? `${p.system}
+
+${memory}` : p.system, p.user, def.schema, () => def.mock!(ctx)); // purpose: generate
     }
 
     let passed: boolean | null = null;

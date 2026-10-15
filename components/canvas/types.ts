@@ -36,7 +36,18 @@ export type NodeState = {
   review: { startedAt: string; endedAt: string | null; approved: boolean | null } | null;
 };
 
-export type DocRow = { id: string; filename: string; input_node: string | null; is_values: boolean; created_at: string; chars: number; chunks: number };
+export type DocRow = {
+  id: string;
+  filename: string;
+  input_node: string | null;
+  is_values: boolean;
+  created_at: string;
+  chars: number;
+  chunks: number;
+  /** Null = belum ditinjau (belum dibaca analisis). */
+  reviewed_at?: string | null;
+  quality?: { warnings?: { code: string; message: string }[]; stats?: { chars: number; chunks: number; avgChunk: number } } | null;
+};
 
 export type QuestionRow = {
   id: string;

@@ -26,7 +26,7 @@ export async function createSyntheticCase(createdBy?: string) {
   const graph = templateGraph("full");
   await db.insert(schema.workflows).values({ projectId: project.id, name: "Alur berpikir", graph });
   const inputOf = (filename: string) => graph.nodes.find((n) => n.type === "input" && n.label === INPUT_LABEL_OF[filename])?.id ?? null;
-  for (const d of SYNTHETIC_DOCUMENTS) await ingestDocument(project.id, d.filename, d.text, !!d.isValues, inputOf(d.filename));
+  for (const d of SYNTHETIC_DOCUMENTS) await ingestDocument(project.id, d.filename, d.text, !!d.isValues, inputOf(d.filename), true);
   await db.insert(schema.goldFactors).values(SYNTHETIC_GOLD.map((g) => ({ ...g, projectId: project.id })));
   return project;
 }

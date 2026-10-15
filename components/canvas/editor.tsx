@@ -56,10 +56,11 @@ import { OutputPanel } from "./output-panel";
 import { NotePanel, ReviewPanel, ValidatorPanel } from "./check-panels";
 import { flowKey, phaseLabel } from "./summary";
 import { ReportPanel } from "./report-panel";
+import type { NextAction } from "./next-steps";
 import { CalcOverview } from "./calc-overview";
 import { staleMap } from "./stale";
 import { Modal } from "@/components/projects/modal";
-import { canvasNodeOf as canvasNodeOfKey } from "@/lib/engine/canvas";
+import { canvasNodeOf as canvasNodeOfKey, processKeyOf } from "@/lib/engine/canvas";
 import type { ExecResult, FlowData, FlowPatch, PaletteItem, PlacementMap, ProjectData, RunState } from "./types";
 
 // ===== Konversi graf ⇄ React Flow =====
@@ -675,6 +676,26 @@ export function CanvasEditor({
     [nodes, edges, presentKeys, centerPos, setNodes, setEdges],
   );
 
+  /** Aksi dari "Saran langkah berikutnya": tambah analisis bawaan, atau proses kustom berisi instruksi + panah dari induknya. */
+  const addSuggested = useCallback(
+    (a: NextAction) => {
+      if (a.type === "addBuiltin") return addNode({ type: "process", key: a.key });
+      if (a.type !== "addCustom") return;
+      const parentNodes = a.parents.map((k) => canvasNodeOfKey(graph, k)).filter((n): n is NonNullable<typeof n> => !!n);
+      const flows = parentNodes.map((p) => nodes.find((n) => n.id === p.id)).filter((n): n is FlowNode => !!n);
+      const base = flows.length
+        ? { x: Math.max(...flows.map((n) => n.position.x + sizeOf(n).w)) + 80, y: Math.max(...flows.map((n) => n.position.y)) }
+        : centerPos("process");
+      const position = { ...base };
+      for (let i = 0; i < 12 && nodes.some((n) => Math.abs(n.position.x - position.x) < 200 && Math.abs(n.position.y - position.y) < 90); i++) position.y += 110;
+      const id = crypto.randomUUID();
+      const data: FlowData = { gtype: "process", key: "custom", custom: { name: a.name, instruction: a.instruction, prefix: a.prefix, requireEvidence: true } };
+      setNodes([...nodes.map((n) => (n.selected ? { ...n, selected: false } : n)), { id, type: rfType("process"), position, selected: true, data }]);
+      if (flows.length) setEdges((es) => [...es, ...flows.map((p) => ({ id: `${p.id}->${id}`, source: p.id, target: id }))]);
+    },
+    [addNode, graph, nodes, centerPos, setNodes, setEdges],
+  );
+
   /** Tambah validator/tinjauan untuk node proses tertentu (dari panel proses); proses tetap terpilih. */
   const addCheck = useCallback(
     (processId: string, type: CheckType) => {
@@ -1249,6 +1270,7 @@ export function CanvasEditor({
                 data={data}
                 running={!!runState}
                 onApplyPlacement={(placement) => applyPlacement(placement)}
+                onSuggestion={addSuggested}
                 onSelectNode={(key) => {
                   const n = canvasNodeOfKey(graph, key);
                   if (n) selectNode(n.id);
@@ -1275,6 +1297,11 @@ export function CanvasEditor({
                 nodeId={sel.id}
                 data={sel.data}
                 docs={data.documents.filter((d) => d.input_node === sel.id)}
+                affected={graph.edges
+                  .filter((e) => e.from === sel.id)
+                  .map((e) => graph.nodes.find((n) => n.id === e.to))
+                  .filter((n): n is NonNullable<typeof n> => !!n && n.type === "process")
+                  .map((n) => labelOf(graph, processKeyOf(n) ?? n.id))}
                 onChange={(p) => patchNode(sel.id, p)}
                 onChanged={refreshSafe}
               />

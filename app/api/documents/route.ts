@@ -4,7 +4,10 @@ import { ingestDocument } from "@/lib/rag/embed";
 
 export const maxDuration = 60;
 
-/** Unggah PDF/DOCX/TXT → ekstrak → chunking → embedding → simpan ke documents dan chunks. */
+/**
+ * Unggah PDF/DOCX/TXT → ekstrak → chunking → embedding → simpan ke documents dan chunks.
+ * Dokumen baru berstatus "perlu ditinjau" beserta peringatan kualitasnya; dibaca analisis setelah disetujui.
+ */
 export const POST = handle(async (req: Request) => {
   const form = await req.formData();
   const projectId = String(form.get("projectId") ?? "");
@@ -20,12 +23,12 @@ export const POST = handle(async (req: Request) => {
     const text = await extractText(file.name, Buffer.from(await file.arrayBuffer()));
     if (!text.trim()) throw new HttpError(422, `Tidak ada teks yang bisa diekstrak dari ${file.name} (mungkin hasil pindaian)`);
     const r = await ingestDocument(projectId, file.name, text, isValues, inputNode);
-    results.push({ id: r.document.id, filename: file.name, chunks: r.chunks });
+    results.push({ id: r.document.id, filename: file.name, chunks: r.chunks, quality: r.quality });
   }
   if (pasted) {
     const name = String(form.get("filename") ?? "") || `Teks tempel ${new Date().toLocaleString("id-ID")}.txt`;
     const r = await ingestDocument(projectId, name, pasted, isValues, inputNode);
-    results.push({ id: r.document.id, filename: name, chunks: r.chunks });
+    results.push({ id: r.document.id, filename: name, chunks: r.chunks, quality: r.quality });
   }
   return { documents: results };
 });

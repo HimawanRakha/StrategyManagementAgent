@@ -5,7 +5,7 @@
 //   verdict <tag>          putusan per node run: galat sendiri = ada butir yang ditandai galat oleh KEDUA penilai AI;
 //                          galat terbawa = ada induk yang bergalat (sendiri/terbawa)
 //   inject [per=2]         penyuntikan galat ke output baseline yang putusannya bersih → d (deteksi) dan r (perbaikan)
-//   runs <tag> <opt|v-semua|v-rekom|canvas> [n=5]   buat & jalankan n run dengan penempatan hasil optimasi / validator di semua analisis
+//   runs <tag> <opt|v-semua|v-rekom|canvas|memori> [n=5]   buat & jalankan n run dengan penempatan hasil optimasi / validator di semua analisis
 //   pasang-rekom [empiris] pasang validator/tinjauan flow rekomendasi (sweep.json) di canvas proyek
 //   report                 hitung parameter, optimasi, prediksi vs nyata → hasil-eksperimen/*.json, *.xlsx, RINGKASAN.md
 import { config } from "dotenv";
@@ -61,7 +61,7 @@ async function judge(tag: string, ulang: string[] = []) {
     const target = nrs.filter((n) => ulang.includes(n.nodeKey)).map((n) => n.id);
     if (target.length) {
       const old = await d.select().from(schema.annotations).where(and(inArray(schema.annotations.nodeRunId, target), like(schema.annotations.annotator, "AI-judge%")));
-      writeFileSync(`hasil-eksperimen/anotasi-lama-${tag}-${ulang.join("+")}-${Date.now()}.json`, JSON.stringify(old));
+      writeFileSync(`hasil-eksperimen/anotasi-lama-${tag}-${ulang.length > 3 ? `${ulang.length}-node` : ulang.join("+")}-${Date.now()}.json`, JSON.stringify(old));
       await d.delete(schema.annotations).where(and(inArray(schema.annotations.nodeRunId, target), like(schema.annotations.annotator, "AI-judge%")));
       console.log(`Nilai ulang ${ulang.join(", ")}: ${old.length} label lama dicadangkan & dihapus`);
     }
@@ -93,7 +93,11 @@ async function judge(tag: string, ulang: string[] = []) {
     const evidence = (nr.input?.evidence ?? []).map((c) => `[${c.id}] (${c.source}) ${c.content}`).join("\n\n").slice(0, 16000);
     // Hasil analisis sebelumnya (induk) yang dirujuk butir ini, mis. daftar faktor S/W/O/T untuk Matriks SWOT.
     // Tanpa ini penilai menandai rujukan "S1/O2" sebagai tidak didukung hanya karena tidak melihat daftarnya.
-    const parentKeys = ((nr.input as { parents?: string[] } | null)?.parents ?? []).filter((k) => !k.startsWith("custom_"));
+    // JUDGE_PARENTS="swot_matrix,qspm" → konteks induk hanya untuk node itu (meniru kondisi penilaian run baseline);
+    // bawaan: semua node.
+    const parentScope = process.env.JUDGE_PARENTS?.split(",").map((x) => x.trim()).filter(Boolean);
+    const withParents = !parentScope || parentScope.includes(nr.nodeKey);
+    const parentKeys = withParents ? ((nr.input as { parents?: string[] } | null)?.parents ?? []).filter((k) => !k.startsWith("custom_")) : [];
     const parentRuns = parentKeys.length
       ? await d.select().from(schema.nodeRuns).where(and(eq(schema.nodeRuns.runId, nr.runId), inArray(schema.nodeRuns.nodeKey, parentKeys)))
       : [];
@@ -240,6 +244,8 @@ async function runs(tag: string, kind: string, n = 5) {
   let placement: Record<string, { validator: boolean; human: boolean }> | undefined;
   // "canvas": ikut validator/tinjauan yang terpasang di canvas; tinjauan dilakukan manusia di aplikasi.
   if (kind === "canvas") placement = undefined;
+  // "memori": tanpa validator/tinjauan seperti baseline, tetapi dengan memori inti organisasi (uji context engineering).
+  else if (kind === "memori") placement = Object.fromEntries(keys.map((k) => [k, { validator: false, human: false }]));
   else if (kind === "v-semua") placement = Object.fromEntries(keys.map((k) => [k, { validator: true, human: false }]));
   else if (kind === "v-rekom") {
     // Bagian validator dari flow rekomendasi (hasil sweep), tanpa tinjauan manusia.
@@ -253,7 +259,7 @@ async function runs(tag: string, kind: string, n = 5) {
   }
   const existing = await runsOf(tag);
   const created = [];
-  for (let i = existing.length; i < n; i++) created.push(await createRun({ workflowId: wf.id, experimentTag: tag, placement, mode: "manual", createdBy: "eksperimen-ai" }));
+  for (let i = existing.length; i < n; i++) created.push(await createRun({ workflowId: wf.id, experimentTag: tag, placement, mode: "manual", createdBy: "eksperimen-ai", contextMemory: kind === "memori" }));
   const all = [...existing.map((r) => r.id), ...created.map((r) => r.id)];
   console.log(`Menjalankan ${all.length} run bertag ${tag}`);
   await pool(all, 3, async (id) => {
